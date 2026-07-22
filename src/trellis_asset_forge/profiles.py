@@ -1,6 +1,7 @@
 """Built-in game asset quality profiles."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -9,7 +10,7 @@ class GameProfile:
 
     name: str
     triangle_budget: int
-    texture_size: int
+    texture_size: Literal[1024, 2048, 4096]
     max_materials: int
     max_components: int
     lod_ratios: tuple[float, ...]
@@ -50,4 +51,3 @@ def get_profile(name: str) -> GameProfile:
     except KeyError as error:
         supported = ", ".join(sorted(PROFILES))
         raise ValueError(f"Unknown game profile {name!r}; choose one of: {supported}") from error
-

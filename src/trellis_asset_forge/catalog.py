@@ -6,9 +6,19 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
-from trellis_asset_forge.domain import AssetRecord, GenerationSpec, ReferenceRecord
+from trellis_asset_forge.domain import (
+    AssetRecord,
+    GenerationRecord,
+    GenerationRequest,
+    GenerationSpec,
+    GenerationStatus,
+    ReferenceRecord,
+    RemoteJob,
+)
 from trellis_asset_forge.manifest import ResolvedAsset
 from trellis_asset_forge.profiles import get_profile
 
@@ -34,6 +44,25 @@ CREATE TABLE IF NOT EXISTS asset_references (
     sha256 TEXT NOT NULL,
     PRIMARY KEY (asset_id, position)
 );
+CREATE TABLE IF NOT EXISTS generations (
+    generation_id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
+    variant INTEGER NOT NULL,
+    seed INTEGER NOT NULL,
+    endpoint TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request_id TEXT,
+    status_url TEXT,
+    response_url TEXT,
+    estimated_cost_usd TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    artifact_path TEXT,
+    remote_url TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS generations_asset_id ON generations(asset_id, created_at);
 """
 
 
@@ -130,6 +159,165 @@ class Catalog:
                 )
             return result
 
+    def get_asset(self, asset_id: str) -> AssetRecord:
+        """Return one asset or raise a stable lookup error."""
+        for asset in self.list_assets():
+            if asset.asset_id == asset_id:
+                return asset
+        raise KeyError(f"Unknown asset: {asset_id}")
+
+    def create_generation(
+        self,
+        request: GenerationRequest,
+        *,
+        estimated_cost_usd: str,
+    ) -> GenerationRecord:
+        """Persist a planned candidate before its remote submission."""
+        now = datetime.now(UTC).isoformat()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO generations (
+                    generation_id, asset_id, variant, seed, endpoint, status,
+                    estimated_cost_usd, request_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?)
+                """,
+                (
+                    request.generation_id,
+                    request.asset_id,
+                    request.variant,
+                    request.seed,
+                    request.endpoint,
+                    estimated_cost_usd,
+                    request.model_dump_json(),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_generation(request.generation_id)
+
+    def mark_submitted(self, generation_id: str, remote_job: RemoteJob) -> GenerationRecord:
+        """Attach remote queue coordinates to a planned generation."""
+        self._update_generation(
+            generation_id,
+            status="submitted",
+            request_id=remote_job.request_id,
+            status_url=remote_job.status_url,
+            response_url=remote_job.response_url,
+        )
+        return self.get_generation(generation_id)
+
+    def mark_failed(self, generation_id: str, error: str) -> GenerationRecord:
+        """Record a failure without losing the submitted request evidence."""
+        self._update_generation(generation_id, status="failed", error=error)
+        return self.get_generation(generation_id)
+
+    def mark_running(self, generation_id: str) -> GenerationRecord:
+        """Record that fal has started processing a candidate."""
+        self._update_generation(generation_id, status="running")
+        return self.get_generation(generation_id)
+
+    def mark_downloaded(
+        self,
+        generation_id: str,
+        *,
+        artifact_path: Path,
+        remote_url: str,
+    ) -> GenerationRecord:
+        """Attach the locally owned artifact immediately after download."""
+        self._update_generation(
+            generation_id,
+            status="downloaded",
+            artifact_path=str(artifact_path.resolve()),
+            remote_url=remote_url,
+        )
+        return self.get_generation(generation_id)
+
+    def list_generations(self, asset_id: str | None = None) -> list[GenerationRecord]:
+        """Return generations in deterministic creation order."""
+        query = "SELECT * FROM generations"
+        parameters: tuple[str, ...] = ()
+        if asset_id is not None:
+            query += " WHERE asset_id = ?"
+            parameters = (asset_id,)
+        query += " ORDER BY created_at, variant, generation_id"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._generation_from_row(row) for row in rows]
+
+    def get_generation(self, generation_id: str) -> GenerationRecord:
+        """Return one generation by local stable identifier."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM generations WHERE generation_id = ?",
+                (generation_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown generation: {generation_id}")
+        return self._generation_from_row(row)
+
+    def _update_generation(
+        self,
+        generation_id: str,
+        *,
+        status: GenerationStatus,
+        request_id: str | None = None,
+        status_url: str | None = None,
+        response_url: str | None = None,
+        error: str | None = None,
+        artifact_path: str | None = None,
+        remote_url: str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE generations SET
+                    status = ?,
+                    request_id = COALESCE(?, request_id),
+                    status_url = COALESCE(?, status_url),
+                    response_url = COALESCE(?, response_url),
+                    error = COALESCE(?, error),
+                    artifact_path = COALESCE(?, artifact_path),
+                    remote_url = COALESCE(?, remote_url),
+                    updated_at = ?
+                WHERE generation_id = ?
+                """,
+                (
+                    status,
+                    request_id,
+                    status_url,
+                    response_url,
+                    error,
+                    artifact_path,
+                    remote_url,
+                    datetime.now(UTC).isoformat(),
+                    generation_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown generation: {generation_id}")
+
+    @staticmethod
+    def _generation_from_row(row: sqlite3.Row) -> GenerationRecord:
+        artifact = row["artifact_path"]
+        return GenerationRecord(
+            generation_id=str(row["generation_id"]),
+            asset_id=str(row["asset_id"]),
+            variant=int(row["variant"]),
+            seed=int(row["seed"]),
+            endpoint=str(row["endpoint"]),
+            status=cast(GenerationStatus, str(row["status"])),
+            request_id=str(row["request_id"]) if row["request_id"] is not None else None,
+            status_url=str(row["status_url"]) if row["status_url"] is not None else None,
+            response_url=(
+                str(row["response_url"]) if row["response_url"] is not None else None
+            ),
+            estimated_cost_usd=Decimal(str(row["estimated_cost_usd"])),
+            artifact_path=Path(str(artifact)) if artifact is not None else None,
+            remote_url=str(row["remote_url"]) if row["remote_url"] is not None else None,
+            error=str(row["error"]) if row["error"] is not None else None,
+        )
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path)
@@ -140,4 +328,3 @@ class Catalog:
                 yield connection
         finally:
             connection.close()
-

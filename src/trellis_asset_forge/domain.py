@@ -133,3 +133,79 @@ class ImportResult(BaseModel):
     generations_planned: int
     estimated_cost_usd: Decimal
 
+
+class GenerationRequest(BaseModel):
+    """Complete, reproducible request passed to a remote generator adapter."""
+
+    model_config = ConfigDict(frozen=True)
+
+    generation_id: str
+    asset_id: str
+    variant: int = Field(ge=0)
+    seed: int = Field(ge=0, le=2_147_483_647)
+    endpoint: str
+    references: tuple[Path, ...]
+    resolution: Literal[512, 1024, 1536]
+    texture_size: Literal[1024, 2048, 4096]
+    decimation_target: int = Field(ge=5_000, le=500_000)
+    remesh: bool
+
+
+class RemoteJob(BaseModel):
+    """Durable queue coordinates returned by a generator adapter."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request_id: str
+    status_url: str
+    response_url: str
+
+
+class RemoteUpdate(BaseModel):
+    """Provider-neutral observation of a queued remote job."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["queued", "running", "completed", "failed"]
+    result_url: str | None = None
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self) -> RemoteUpdate:
+        if self.status == "completed" and not self.result_url:
+            raise ValueError("completed remote jobs require a result URL")
+        return self
+
+
+GenerationStatus = Literal[
+    "planned",
+    "submitted",
+    "running",
+    "downloaded",
+    "failed",
+    "inspected",
+    "approved",
+    "rejected",
+    "processed",
+    "promoted",
+]
+
+
+class GenerationRecord(BaseModel):
+    """Locally durable state for one generated candidate."""
+
+    model_config = ConfigDict(frozen=True)
+
+    generation_id: str
+    asset_id: str
+    variant: int
+    seed: int
+    endpoint: str
+    status: GenerationStatus
+    request_id: str | None = None
+    status_url: str | None = None
+    response_url: str | None = None
+    estimated_cost_usd: Decimal
+    artifact_path: Path | None = None
+    remote_url: str | None = None
+    error: str | None = None

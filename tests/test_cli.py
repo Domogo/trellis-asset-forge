@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from trellis_asset_forge import __version__
 from trellis_asset_forge.cli import app
+from trellis_asset_forge.forge import AssetForge
 
 
 def test_version_option_reports_package_version() -> None:
@@ -62,3 +64,19 @@ assets:
     assert assets.exit_code == 0
     assert "props.crate" in assets.stdout
     assert "20,000 tris" in assets.stdout
+
+
+def test_generate_command_fails_cleanly_without_server_side_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    AssetForge.initialize(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["generate", "props.crate", "--workspace", str(tmp_path), "--max-cost", "1.00"],
+    )
+
+    assert result.exit_code == 1
+    assert "FAL_KEY is not set" in result.stderr
