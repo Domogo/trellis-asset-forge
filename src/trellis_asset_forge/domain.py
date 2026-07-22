@@ -38,6 +38,16 @@ class GenerationSpec(BaseModel):
     unit_cost_usd: Decimal | None = Field(default=None, gt=0)
 
 
+class GameSpec(BaseModel):
+    """Engine-neutral import policy promoted with a finished asset."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scale_meters: float = Field(default=1.0, gt=0, le=10_000)
+    pivot: Literal["source", "center", "base-center"] = "base-center"
+    collision: Literal["none", "convex", "trimesh"] = "convex"
+
+
 class AssetSpec(BaseModel):
     """One planned asset and its game-readiness policy."""
 
@@ -51,6 +61,7 @@ class AssetSpec(BaseModel):
     profile: str = "desktop-prop"
     references: list[ReferenceSpec] = Field(min_length=1, max_length=12)
     generation: GenerationSpec = Field(default_factory=GenerationSpec)
+    game: GameSpec = Field(default_factory=GameSpec)
     export: str = Field(min_length=1)
 
     @field_validator("id")
@@ -121,6 +132,7 @@ class AssetRecord(BaseModel):
     texture_size: int
     export_path: str
     generation: GenerationSpec
+    game: GameSpec
     references: tuple[ReferenceRecord, ...]
 
 
@@ -192,6 +204,18 @@ GenerationStatus = Literal[
 ]
 
 
+class ProcessedArtifact(BaseModel):
+    """One immutable, measured LOD produced from an approved candidate."""
+
+    model_config = ConfigDict(frozen=True)
+
+    lod: int = Field(ge=0)
+    ratio: float = Field(gt=0, le=1)
+    path: Path
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    quality_report: MeshQualityReport
+
+
 class GenerationRecord(BaseModel):
     """Locally durable state for one generated candidate."""
 
@@ -212,3 +236,5 @@ class GenerationRecord(BaseModel):
     error: str | None = None
     quality_report: MeshQualityReport | None = None
     review_notes: str | None = None
+    processed_artifacts: tuple[ProcessedArtifact, ...] = ()
+    promotion_manifest_path: Path | None = None

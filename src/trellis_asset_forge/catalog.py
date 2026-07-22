@@ -10,12 +10,16 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+from pydantic import TypeAdapter
+
 from trellis_asset_forge.domain import (
     AssetRecord,
+    GameSpec,
     GenerationRecord,
     GenerationRequest,
     GenerationSpec,
     GenerationStatus,
+    ProcessedArtifact,
     ReferenceRecord,
     RemoteJob,
 )
@@ -33,6 +37,7 @@ CREATE TABLE IF NOT EXISTS assets (
     profile TEXT NOT NULL,
     export_path TEXT NOT NULL,
     generation_json TEXT NOT NULL,
+    game_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -61,6 +66,8 @@ CREATE TABLE IF NOT EXISTS generations (
     error TEXT,
     quality_json TEXT,
     review_notes TEXT,
+    processed_json TEXT,
+    promotion_manifest_path TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -86,8 +93,8 @@ class Catalog:
                 """
                 INSERT INTO assets (
                     asset_id, name, category, brief, topology_notes, profile,
-                    export_path, generation_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    export_path, generation_json, game_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(asset_id) DO UPDATE SET
                     name = excluded.name,
                     category = excluded.category,
@@ -96,6 +103,7 @@ class Catalog:
                     profile = excluded.profile,
                     export_path = excluded.export_path,
                     generation_json = excluded.generation_json,
+                    game_json = excluded.game_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -107,6 +115,7 @@ class Catalog:
                     spec.profile,
                     spec.export,
                     spec.generation.model_dump_json(),
+                    spec.game.model_dump_json(),
                     now,
                     now,
                 ),
@@ -138,6 +147,7 @@ class Catalog:
                 ).fetchall()
                 profile = get_profile(str(row["profile"]))
                 generation = GenerationSpec.model_validate_json(str(row["generation_json"]))
+                game = GameSpec.model_validate_json(str(row["game_json"]))
                 result.append(
                     AssetRecord(
                         asset_id=str(row["asset_id"]),
@@ -150,6 +160,7 @@ class Catalog:
                         texture_size=generation.texture_size or profile.texture_size,
                         export_path=str(row["export_path"]),
                         generation=generation,
+                        game=game,
                         references=tuple(
                             ReferenceRecord(
                                 path=Path(str(reference_row["path"])),
@@ -264,6 +275,28 @@ class Catalog:
         )
         return self.get_generation(generation_id)
 
+    def mark_processed(
+        self, generation_id: str, processed_artifacts_json: str
+    ) -> GenerationRecord:
+        """Persist the validated LOD set built from an approved candidate."""
+        self._update_generation(
+            generation_id,
+            status="processed",
+            processed_json=processed_artifacts_json,
+        )
+        return self.get_generation(generation_id)
+
+    def mark_promoted(
+        self, generation_id: str, promotion_manifest_path: Path
+    ) -> GenerationRecord:
+        """Record that an approved LOD set is now available to a game project."""
+        self._update_generation(
+            generation_id,
+            status="promoted",
+            promotion_manifest_path=str(promotion_manifest_path.resolve()),
+        )
+        return self.get_generation(generation_id)
+
     def list_generations(self, asset_id: str | None = None) -> list[GenerationRecord]:
         """Return generations in deterministic creation order."""
         query = "SELECT * FROM generations"
@@ -300,6 +333,8 @@ class Catalog:
         remote_url: str | None = None,
         quality_json: str | None = None,
         review_notes: str | None = None,
+        processed_json: str | None = None,
+        promotion_manifest_path: str | None = None,
     ) -> None:
         with self._connection() as connection:
             cursor = connection.execute(
@@ -314,6 +349,8 @@ class Catalog:
                     remote_url = COALESCE(?, remote_url),
                     quality_json = COALESCE(?, quality_json),
                     review_notes = COALESCE(?, review_notes),
+                    processed_json = COALESCE(?, processed_json),
+                    promotion_manifest_path = COALESCE(?, promotion_manifest_path),
                     updated_at = ?
                 WHERE generation_id = ?
                 """,
@@ -327,6 +364,8 @@ class Catalog:
                     remote_url,
                     quality_json,
                     review_notes,
+                    processed_json,
+                    promotion_manifest_path,
                     datetime.now(UTC).isoformat(),
                     generation_id,
                 ),
@@ -340,6 +379,7 @@ class Catalog:
 
         artifact = row["artifact_path"]
         quality_json = row["quality_json"]
+        processed_json = row["processed_json"]
         return GenerationRecord(
             generation_id=str(row["generation_id"]),
             asset_id=str(row["asset_id"]),
@@ -364,6 +404,18 @@ class Catalog:
             review_notes=(
                 str(row["review_notes"]) if row["review_notes"] is not None else None
             ),
+            processed_artifacts=(
+                TypeAdapter(tuple[ProcessedArtifact, ...]).validate_json(
+                    str(processed_json)
+                )
+                if processed_json is not None
+                else ()
+            ),
+            promotion_manifest_path=(
+                Path(str(row["promotion_manifest_path"]))
+                if row["promotion_manifest_path"] is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -377,6 +429,22 @@ class Catalog:
             connection.execute("ALTER TABLE generations ADD COLUMN quality_json TEXT")
         if "review_notes" not in columns:
             connection.execute("ALTER TABLE generations ADD COLUMN review_notes TEXT")
+        if "processed_json" not in columns:
+            connection.execute("ALTER TABLE generations ADD COLUMN processed_json TEXT")
+        if "promotion_manifest_path" not in columns:
+            connection.execute(
+                "ALTER TABLE generations ADD COLUMN promotion_manifest_path TEXT"
+            )
+        asset_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(assets)").fetchall()
+        }
+        if "game_json" not in asset_columns:
+            connection.execute(
+                "ALTER TABLE assets ADD COLUMN game_json TEXT NOT NULL "
+                "DEFAULT '{\"scale_meters\":1.0,\"pivot\":\"base-center\","
+                "\"collision\":\"convex\"}'"
+            )
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

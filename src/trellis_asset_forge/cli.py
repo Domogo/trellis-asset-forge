@@ -10,6 +10,7 @@ from trellis_asset_forge import __version__
 from trellis_asset_forge.fal import FalError, FalGenerator
 from trellis_asset_forge.forge import AssetForge
 from trellis_asset_forge.generation import CostLimitError
+from trellis_asset_forge.processing import GltfpackProcessor, ProcessingError
 
 app = typer.Typer(
     name="trellis-forge",
@@ -245,6 +246,53 @@ def reject_generation_command(
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(1) from error
     typer.echo(f"Rejected {generation.generation_id}")
+
+
+@app.command("process")
+def process_generation_command(
+    generation_id: Annotated[str, typer.Argument(help="Approved generation identifier.")],
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+    gltfpack: Annotated[
+        str,
+        typer.Option(help="gltfpack executable name or absolute path."),
+    ] = "gltfpack",
+) -> None:
+    """Optimize an approved candidate and build its profile's validated LODs."""
+    try:
+        forge = AssetForge.open(workspace)
+        generation = forge.process_generation(
+            generation_id,
+            processor=GltfpackProcessor(executable=gltfpack),
+        )
+    except (KeyError, OSError, ProcessingError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    for artifact in generation.processed_artifacts:
+        typer.echo(
+            f"LOD{artifact.lod}  ratio={artifact.ratio:g}  "
+            f"{artifact.quality_report.triangles:,} tris  {artifact.path}"
+        )
+
+
+@app.command("promote")
+def promote_generation_command(
+    generation_id: Annotated[str, typer.Argument(help="Processed generation identifier.")],
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+) -> None:
+    """Export validated LODs and provenance to the configured game asset root."""
+    try:
+        generation = AssetForge.open(workspace).promote_generation(generation_id)
+    except (KeyError, OSError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Promoted {generation.generation_id}")
+    typer.echo(f"Provenance: {generation.promotion_manifest_path}")
 
 
 if __name__ == "__main__":

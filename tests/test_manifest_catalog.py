@@ -18,7 +18,12 @@ assets:
     name: Scrap Crate
     category: props
     brief: Chunky static crate with a clean silhouette.
+    topology_notes: Preserve broad bevels and avoid thin floating shards.
     profile: desktop-prop
+    game:
+      scale_meters: 1.2
+      pivot: base-center
+      collision: convex
     references:
       - path: references/crate.png
         view: hero
@@ -42,6 +47,10 @@ assets:
     assert asset.asset_id == "props.scrap-crate"
     assert asset.profile == "desktop-prop"
     assert asset.triangle_budget == 50_000
+    assert asset.game.scale_meters == 1.2
+    assert asset.game.pivot == "base-center"
+    assert asset.game.collision == "convex"
+    assert "floating shards" in asset.topology_notes
     assert asset.references[0].path == reference.resolve()
     assert asset.references[0].sha256 == (
         "21d23169913420f8c18a00ffc74033b65f839abade71f712769fc1253bc55320"

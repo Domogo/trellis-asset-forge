@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import secrets
+import shutil
 import uuid
 from decimal import Decimal
 from pathlib import Path
+
+from pydantic import TypeAdapter
 
 from trellis_asset_forge.catalog import Catalog
 from trellis_asset_forge.domain import (
@@ -13,12 +19,14 @@ from trellis_asset_forge.domain import (
     GenerationRecord,
     GenerationRequest,
     ImportResult,
+    ProcessedArtifact,
     RemoteJob,
 )
 from trellis_asset_forge.generation import CostLimitError, Generator
 from trellis_asset_forge.manifest import load_manifest
 from trellis_asset_forge.mesh_quality import inspect_glb
 from trellis_asset_forge.pricing import estimate_generation_cost
+from trellis_asset_forge.processing import MeshProcessor
 from trellis_asset_forge.profiles import get_profile
 from trellis_asset_forge.workspace import Workspace
 
@@ -147,6 +155,111 @@ class AssetForge:
             status="rejected",
             notes=cleaned,
         )
+
+    def process_generation(
+        self,
+        generation_id: str,
+        *,
+        processor: MeshProcessor,
+    ) -> GenerationRecord:
+        """Build and validate the declared LOD set from an approved candidate."""
+        generation = self.catalog.get_generation(generation_id)
+        if generation.status != "approved":
+            raise ValueError("Only an approved candidate can be processed")
+        if generation.artifact_path is None:
+            raise ValueError("Approved candidate is missing its local artifact")
+        asset = self.catalog.get_asset(generation.asset_id)
+        destination_dir = generation.artifact_path.parent / "processed"
+        artifacts = processor.process(
+            generation.artifact_path,
+            destination_dir,
+            get_profile(asset.profile),
+        )
+        serialized = TypeAdapter(tuple[ProcessedArtifact, ...]).dump_json(artifacts).decode()
+        return self.catalog.mark_processed(generation_id, serialized)
+
+    def promote_generation(self, generation_id: str) -> GenerationRecord:
+        """Atomically export validated LODs and portable provenance for game import."""
+        generation = self.catalog.get_generation(generation_id)
+        if generation.status != "processed" or not generation.processed_artifacts:
+            raise ValueError("Only a processed candidate can be promoted")
+        asset = self.catalog.get_asset(generation.asset_id)
+        export_root = self.workspace.export_root.resolve()
+        primary = (export_root / asset.export_path).resolve()
+        if not primary.is_relative_to(export_root):
+            raise ValueError("Asset export path escapes the configured export root")
+        primary.parent.mkdir(parents=True, exist_ok=True)
+
+        output_records: list[dict[str, object]] = []
+        for artifact in generation.processed_artifacts:
+            destination = (
+                primary
+                if artifact.lod == 0
+                else primary.with_name(f"{primary.stem}.lod{artifact.lod}.glb")
+            )
+            self._atomic_copy(artifact.path, destination)
+            output_records.append(
+                {
+                    "lod": artifact.lod,
+                    "ratio": artifact.ratio,
+                    "path": destination.name,
+                    "sha256": artifact.sha256,
+                    "triangles": artifact.quality_report.triangles,
+                }
+            )
+
+        source_hash = ""
+        if generation.artifact_path is not None:
+            source_hash = self._hash_file(generation.artifact_path)
+        provenance = {
+            "version": 1,
+            "asset": {
+                "id": asset.asset_id,
+                "name": asset.name,
+                "category": asset.category,
+                "profile": asset.profile,
+                "brief": asset.brief,
+                "topology_notes": asset.topology_notes,
+                "game": asset.game.model_dump(mode="json"),
+            },
+            "source": {
+                "generation_id": generation.generation_id,
+                "seed": generation.seed,
+                "endpoint": generation.endpoint,
+                "sha256": source_hash,
+                "review_notes": generation.review_notes or "",
+                "references": [
+                    {
+                        "filename": reference.path.name,
+                        "view": reference.view,
+                        "sha256": reference.sha256,
+                    }
+                    for reference in asset.references
+                ],
+            },
+            "outputs": output_records,
+        }
+        manifest_path = primary.with_name(f"{primary.stem}.asset-forge.json")
+        temporary = manifest_path.with_name(f".{manifest_path.name}.part")
+        temporary.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
+        os.replace(temporary, manifest_path)
+        return self.catalog.mark_promoted(generation_id, manifest_path)
+
+    @staticmethod
+    def _atomic_copy(source: Path, destination: Path) -> None:
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        temporary = destination.with_name(f".{destination.name}.part")
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+
+    @staticmethod
+    def _hash_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def sync(self, *, generator: Generator) -> list[GenerationRecord]:
         """Poll active jobs and immediately own completed GLB artifacts locally."""
