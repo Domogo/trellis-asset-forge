@@ -1,0 +1,135 @@
+"""Validated domain models shared by manifests and workflows."""
+
+from __future__ import annotations
+
+import re
+from decimal import Decimal
+from pathlib import Path, PurePosixPath
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from trellis_asset_forge.profiles import PROFILES
+
+ASSET_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+
+
+class ReferenceSpec(BaseModel):
+    """A named image view used to condition generation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    view: str = Field(default="reference", min_length=1, max_length=40)
+
+
+class GenerationSpec(BaseModel):
+    """TRELLIS.2 generation controls that affect cost and mesh output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolution: Literal[512, 1024, 1536] = 1024
+    variants: int = Field(default=1, ge=1, le=20)
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    texture_size: Literal[1024, 2048, 4096] | None = None
+    decimation_target: int | None = Field(default=None, ge=5_000, le=500_000)
+    remesh: bool = True
+    unit_cost_usd: Decimal | None = Field(default=None, gt=0)
+
+
+class AssetSpec(BaseModel):
+    """One planned asset and its game-readiness policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    category: str = Field(min_length=1, max_length=80)
+    brief: str = Field(default="", max_length=2_000)
+    topology_notes: str = Field(default="", max_length=2_000)
+    profile: str = "desktop-prop"
+    references: list[ReferenceSpec] = Field(min_length=1, max_length=12)
+    generation: GenerationSpec = Field(default_factory=GenerationSpec)
+    export: str = Field(min_length=1)
+
+    @field_validator("id")
+    @classmethod
+    def validate_asset_id(cls, value: str) -> str:
+        if not ASSET_ID_PATTERN.fullmatch(value):
+            raise ValueError("must contain lowercase letters/numbers separated by '.', '_' or '-'")
+        return value
+
+    @field_validator("profile")
+    @classmethod
+    def validate_profile(cls, value: str) -> str:
+        if value not in PROFILES:
+            raise ValueError(f"must be one of: {', '.join(sorted(PROFILES))}")
+        return value
+
+    @field_validator("export")
+    @classmethod
+    def validate_export_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("must be a relative path beneath the workspace export root")
+        if path.suffix.lower() != ".glb":
+            raise ValueError("must end in .glb")
+        return path.as_posix()
+
+
+class AssetManifest(BaseModel):
+    """Versioned collection of project-independent asset plans."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    project: str = Field(min_length=1, max_length=120)
+    assets: list[AssetSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_asset_ids(self) -> AssetManifest:
+        ids = [asset.id for asset in self.assets]
+        duplicates = sorted({asset_id for asset_id in ids if ids.count(asset_id) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate asset ids: {', '.join(duplicates)}")
+        return self
+
+
+class ReferenceRecord(BaseModel):
+    """Resolved and content-addressed reference image."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: Path
+    view: str
+    sha256: str
+
+
+class AssetRecord(BaseModel):
+    """Catalog representation returned to callers."""
+
+    model_config = ConfigDict(frozen=True)
+
+    asset_id: str
+    name: str
+    category: str
+    brief: str
+    topology_notes: str
+    profile: str
+    triangle_budget: int
+    texture_size: int
+    export_path: str
+    generation: GenerationSpec
+    references: tuple[ReferenceRecord, ...]
+
+
+class ImportResult(BaseModel):
+    """Observable result of importing a manifest."""
+
+    model_config = ConfigDict(frozen=True)
+
+    project: str
+    assets_imported: int
+    generations_planned: int
+    estimated_cost_usd: Decimal
+
