@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import struct
 from pathlib import Path
 from typing import Literal
 
@@ -63,9 +65,10 @@ def inspect_glb(path: Path, profile: GameProfile) -> MeshQualityReport:
     triangles = int(faces.shape[0])
     vertex_count = int(vertices.shape[0])
     degenerate_faces = _count_degenerate_faces(faces, vertices)
-    boundary_edges, non_manifold_edges = _edge_defects(faces)
-    components = _component_count(faces, vertex_count)
-    materials, textures = _material_counts(scene)
+    topology_faces, topology_vertex_count = _weld_attribute_seams(faces, vertices)
+    boundary_edges, non_manifold_edges = _edge_defects(topology_faces)
+    components = _component_count(topology_faces, topology_vertex_count)
+    materials, textures = _material_counts(resolved, scene)
     extents = np.asarray(mesh.extents, dtype=np.float64)
     bounds = tuple(float(value) for value in extents)
 
@@ -183,6 +186,30 @@ def _edge_defects(faces: np.ndarray) -> tuple[int, int]:
     return int(np.count_nonzero(counts == 1)), int(np.count_nonzero(counts > 2))
 
 
+def _weld_attribute_seams(
+    faces: np.ndarray, vertices: np.ndarray
+) -> tuple[np.ndarray, int]:
+    """Remap coincident positions before evaluating geometric connectivity.
+
+    glTF must duplicate a vertex when UVs, normals, tangents, colors, or material
+    boundaries differ. Those render vertices are not disconnected geometry and
+    must not inflate component or open-boundary evidence.
+    """
+    if vertices.size == 0 or not np.all(np.isfinite(vertices)):
+        return faces, int(vertices.shape[0])
+    extents = np.ptp(vertices, axis=0)
+    scale = float(np.max(extents))
+    if scale <= 0.0:
+        return faces, int(vertices.shape[0])
+    tolerance = max(scale * 1e-7, 1e-12)
+    quantized = np.rint((vertices - np.min(vertices, axis=0)) / tolerance).astype(
+        np.int64
+    )
+    _, inverse = np.unique(quantized, axis=0, return_inverse=True)
+    remapped = inverse[faces]
+    return np.asarray(remapped, dtype=np.int64), int(np.max(inverse)) + 1
+
+
 def _component_count(faces: np.ndarray, vertex_count: int) -> int:
     """Count face-connected components without an optional scipy dependency."""
     parent = np.arange(vertex_count, dtype=np.int64)
@@ -208,7 +235,11 @@ def _component_count(faces: np.ndarray, vertex_count: int) -> int:
     return len({find(item) for item in used})
 
 
-def _material_counts(scene: trimesh.Scene) -> tuple[int, int]:
+def _material_counts(path: Path, scene: trimesh.Scene) -> tuple[int, int]:
+    declared = _glb_declared_material_counts(path)
+    if declared is not None:
+        return declared
+
     materials: set[int] = set()
     textures: set[int] = set()
     texture_fields = (
@@ -229,3 +260,35 @@ def _material_counts(scene: trimesh.Scene) -> tuple[int, int]:
             if texture is not None:
                 textures.add(id(texture))
     return len(materials), len(textures)
+
+
+def _glb_declared_material_counts(path: Path) -> tuple[int, int] | None:
+    """Read standard glTF catalog counts from the JSON chunk of a GLB."""
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if len(header) != 12:
+            return None
+        magic, version, _ = struct.unpack("<4sII", header)
+        if magic != b"glTF" or version != 2:
+            return None
+        while chunk_header := handle.read(8):
+            if len(chunk_header) != 8:
+                return None
+            chunk_length, chunk_type = struct.unpack("<II", chunk_header)
+            payload = handle.read(chunk_length)
+            if len(payload) != chunk_length:
+                return None
+            if chunk_type != 0x4E4F534A:
+                continue
+            try:
+                document = json.loads(payload.rstrip(b" \t\r\n\x00"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return None
+            if not isinstance(document, dict):
+                return None
+            materials = document.get("materials", [])
+            textures = document.get("textures", [])
+            if not isinstance(materials, list) or not isinstance(textures, list):
+                return None
+            return len(materials), len(textures)
+    return None

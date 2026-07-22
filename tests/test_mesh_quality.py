@@ -1,9 +1,17 @@
+import json
+import struct
 from pathlib import Path
 
 import numpy as np
 import trimesh
 
-from trellis_asset_forge.mesh_quality import inspect_glb
+from trellis_asset_forge.mesh_quality import (
+    _component_count,
+    _edge_defects,
+    _glb_declared_material_counts,
+    _weld_attribute_seams,
+    inspect_glb,
+)
 from trellis_asset_forge.profiles import GameProfile, get_profile
 
 
@@ -96,3 +104,32 @@ def test_inspection_detects_degenerate_and_non_manifold_topology(tmp_path: Path)
         "degenerate-faces",
         "non-manifold-edges",
     }
+
+
+def test_topology_welds_render_vertices_split_at_attribute_seams() -> None:
+    box = trimesh.creation.box()
+    split_vertices = box.vertices[box.faces].reshape((-1, 3))
+    split_faces = np.arange(len(split_vertices), dtype=np.int64).reshape((-1, 3))
+
+    welded_faces, welded_vertices = _weld_attribute_seams(split_faces, split_vertices)
+
+    assert welded_vertices == 8
+    assert len(np.unique(welded_faces)) == 8
+    assert _component_count(welded_faces, welded_vertices) == 1
+    assert _edge_defects(welded_faces) == (0, 0)
+
+
+def test_glb_catalog_counts_declared_materials_and_textures(tmp_path: Path) -> None:
+    source = tmp_path / "catalog.glb"
+    payload = json.dumps(
+        {"asset": {"version": "2.0"}, "materials": [{}], "textures": [{}, {}]}
+    ).encode()
+    payload += b" " * ((4 - len(payload) % 4) % 4)
+    total_length = 12 + 8 + len(payload)
+    source.write_bytes(
+        struct.pack("<4sII", b"glTF", 2, total_length)
+        + struct.pack("<II", len(payload), 0x4E4F534A)
+        + payload
+    )
+
+    assert _glb_declared_material_counts(source) == (1, 2)
