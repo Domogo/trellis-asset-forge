@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 
 from trellis_asset_forge import __version__
 from trellis_asset_forge.fal import FalError, FalGenerator
 from trellis_asset_forge.forge import AssetForge
 from trellis_asset_forge.generation import CostLimitError
 from trellis_asset_forge.processing import GltfpackProcessor, ProcessingError
+from trellis_asset_forge.review_web import create_review_app
 
 app = typer.Typer(
     name="trellis-forge",
@@ -293,6 +295,27 @@ def promote_generation_command(
         raise typer.Exit(1) from error
     typer.echo(f"Promoted {generation.generation_id}")
     typer.echo(f"Provenance: {generation.promotion_manifest_path}")
+
+
+@app.command("review")
+def review_workspace_command(
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+    port: Annotated[
+        int,
+        typer.Option(help="Local TCP port for the private review workspace.", min=1024),
+    ] = 8765,
+) -> None:
+    """Serve the candidate review UI on loopback; it is never exposed publicly."""
+    try:
+        review_app = create_review_app(workspace)
+    except (OSError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Private review workspace: http://127.0.0.1:{port}")
+    uvicorn.run(review_app, host="127.0.0.1", port=port, log_level="warning")
 
 
 if __name__ == "__main__":

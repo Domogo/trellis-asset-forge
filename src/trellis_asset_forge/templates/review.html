@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Trellis Asset Forge Review</title>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #101310; color: #ecf2e7; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      header { position: sticky; top: 0; z-index: 2; padding: 20px clamp(20px, 4vw, 56px); border-bottom: 1px solid #303a2d; background: #101310e8; backdrop-filter: blur(12px); }
+      h1 { margin: 0; font-size: clamp(20px, 3vw, 34px); letter-spacing: -.04em; }
+      header p { margin: 6px 0 0; color: #9dab96; }
+      main { padding: 28px clamp(20px, 4vw, 56px) 60px; display: grid; gap: 24px; }
+      .asset { display: grid; gap: 14px; }
+      .asset-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+      h2 { margin: 0; font-size: 18px; }
+      .profile, .status { color: #9dab96; font: 12px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 14px; }
+      article { overflow: hidden; border: 1px solid #303a2d; border-radius: 14px; background: #171c16; }
+      model-viewer { display: block; width: 100%; height: 310px; background: radial-gradient(circle at 50% 45%, #394333, #171c16 65%); }
+      .details { padding: 16px; display: grid; gap: 12px; }
+      .row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+      .id { font: 12px ui-monospace, monospace; color: #bcc8b6; overflow-wrap: anywhere; }
+      .approved { color: #aee887; } .rejected, .failed { color: #ff8a7d; }
+      .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      .metric { padding: 9px; border-radius: 8px; background: #0e120d; }
+      .metric strong { display: block; font-size: 16px; }
+      .metric span { color: #8f9c89; font-size: 11px; }
+      .issues { margin: 0; padding-left: 18px; color: #c6d0c1; font-size: 12px; }
+      form { display: flex; gap: 8px; }
+      input { min-width: 0; flex: 1; border: 1px solid #3b4637; border-radius: 8px; padding: 9px; color: inherit; background: #0e120d; }
+      button { border: 1px solid #53654b; border-radius: 8px; padding: 9px 12px; color: #edf8e6; background: #283523; cursor: pointer; }
+      button:hover { background: #33442d; }
+      .reject button { border-color: #63413c; background: #3d2724; }
+      .empty { color: #9dab96; }
+    </style>
+  </head>
+  <body>
+    <header><h1>Trellis Asset Forge</h1><p>Private local candidate review · topology evidence before approval</p></header>
+    <main>
+      {% for asset in assets %}
+      <section class="asset">
+        <div class="asset-head"><h2>{{ asset.name }}</h2><span class="profile">{{ asset.profile }} · {{ "{:,}".format(asset.triangle_budget) }} tris</span></div>
+        <div class="grid">
+          {% for generation in generations if generation.asset_id == asset.asset_id %}
+          <article>
+            {% if generation.artifact_path %}
+            <model-viewer src="/generations/{{ generation.generation_id }}/model.glb" camera-controls auto-rotate shadow-intensity="1" exposure="1"></model-viewer>
+            {% endif %}
+            <div class="details">
+              <div class="row"><span class="id">{{ generation.generation_id }}</span><span class="status {{ generation.status }}">{{ generation.status|capitalize }}</span></div>
+              {% if generation.quality_report %}
+              <div class="metrics">
+                <div class="metric"><strong>{{ "{:,}".format(generation.quality_report.triangles) }}</strong><span>triangles</span></div>
+                <div class="metric"><strong>{{ "{:,}".format(generation.quality_report.vertices) }}</strong><span>vertices</span></div>
+                <div class="metric"><strong>{{ generation.quality_report.components }}</strong><span>components</span></div>
+              </div>
+              {% if generation.quality_report.issues %}<ul class="issues">{% for issue in generation.quality_report.issues %}<li>{{ issue.severity }} · {{ issue.message }}</li>{% endfor %}</ul>{% endif %}
+              {% endif %}
+              {% if generation.review_notes %}<div class="id">{{ generation.review_notes }}</div>{% endif %}
+              {% if generation.status in ["downloaded", "rejected"] %}<form method="post" action="/generations/{{ generation.generation_id }}/inspect"><button type="submit">Inspect topology</button></form>{% endif %}
+              {% if generation.status == "inspected" %}
+              <form method="post" action="/generations/{{ generation.generation_id }}/approve"><input name="notes" placeholder="Approval notes"><button type="submit">Approve</button></form>
+              <form class="reject" method="post" action="/generations/{{ generation.generation_id }}/reject"><input name="notes" required placeholder="Why reject?"><button type="submit">Reject</button></form>
+              {% endif %}
+            </div>
+          </article>
+          {% else %}<p class="empty">No generated candidates yet.</p>{% endfor %}
+        </div>
+      </section>
+      {% else %}<p class="empty">Import an asset manifest to begin.</p>{% endfor %}
+    </main>
+  </body>
+</html>
