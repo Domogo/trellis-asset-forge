@@ -114,6 +114,34 @@ class AssetForge:
             submitted.append(self.catalog.mark_submitted(request.generation_id, remote_job))
         return submitted
 
+    def submit_all(
+        self,
+        *,
+        generator: Generator,
+        max_cost_usd: Decimal,
+    ) -> list[GenerationRecord]:
+        """Submit the full catalog only after enforcing one aggregate cost ceiling."""
+        assets = self.catalog.list_assets()
+        estimated_cost = sum(
+            (estimate_generation_cost(asset.generation) for asset in assets),
+            start=Decimal("0"),
+        )
+        if estimated_cost > max_cost_usd:
+            raise CostLimitError(
+                f"Catalog batch is estimated at ${estimated_cost:.2f}, "
+                f"above the ${max_cost_usd:.2f} limit"
+            )
+        submitted: list[GenerationRecord] = []
+        for asset in assets:
+            submitted.extend(
+                self.submit_asset(
+                    asset.asset_id,
+                    generator=generator,
+                    max_cost_usd=estimate_generation_cost(asset.generation),
+                )
+            )
+        return submitted
+
     def list_generations(self, asset_id: str | None = None) -> list[GenerationRecord]:
         """List durable generation state, optionally scoped to one asset."""
         return self.catalog.list_generations(asset_id)

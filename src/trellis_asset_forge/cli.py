@@ -159,6 +159,40 @@ def sync_command(
         typer.echo(f"{generation.generation_id}  {generation.status}")
 
 
+@app.command("generate-all")
+def generate_all_command(
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+    max_cost: Annotated[
+        float,
+        typer.Option(help="Hard USD ceiling for the complete catalog batch.", min=0),
+    ] = 10.0,
+    media_ttl: Annotated[
+        int,
+        typer.Option(help="Seconds before fal-hosted input/output media expires."),
+    ] = 3600,
+) -> None:
+    """Submit every cataloged asset after one catalog-wide cost gate."""
+    try:
+        forge = AssetForge.open(workspace)
+        generator = FalGenerator.from_environment(media_ttl_seconds=media_ttl)
+        generations = forge.submit_all(
+            generator=generator,
+            max_cost_usd=Decimal(str(max_cost)),
+        )
+    except (CostLimitError, FalError, KeyError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    for generation in generations:
+        typer.echo(
+            f"Submitted {generation.asset_id} variant={generation.variant} "
+            f"generation={generation.generation_id}"
+        )
+    typer.echo(f"Submitted {len(generations)} candidates. Run `trellis-forge sync`.")
+
+
 @app.command("generations")
 def list_generations_command(
     workspace: Annotated[

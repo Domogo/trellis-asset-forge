@@ -149,3 +149,47 @@ assets:
     assert synced[0].artifact_path is not None
     assert synced[0].artifact_path.read_bytes() == b"generated-glb"
     assert tmp_path / ".asset-forge" / "artifacts" in synced[0].artifact_path.parents
+
+
+def test_submit_all_cost_gates_the_whole_catalog_before_remote_work(tmp_path: Path) -> None:
+    first = tmp_path / "crate.png"
+    second = tmp_path / "barrel.png"
+    first.write_bytes(b"crate")
+    second.write_bytes(b"barrel")
+    manifest = tmp_path / "assets.yaml"
+    manifest.write_text(
+        """
+version: 1
+project: demo
+assets:
+  - id: props.crate
+    name: Crate
+    category: props
+    references: [{path: crate.png}]
+    generation: {resolution: 512, seed: 10}
+    export: props/crate.glb
+  - id: props.barrel
+    name: Barrel
+    category: props
+    references: [{path: barrel.png}]
+    generation: {resolution: 512, seed: 20}
+    export: props/barrel.glb
+""".strip()
+        + "\n"
+    )
+    forge = AssetForge.initialize(tmp_path)
+    forge.import_manifest(manifest)
+    generator = RecordingGenerator()
+
+    with pytest.raises(CostLimitError, match=r"Catalog batch is estimated at \$0.50"):
+        forge.submit_all(generator=generator, max_cost_usd=Decimal("0.49"))
+
+    assert generator.requests == []
+    assert forge.list_generations() == []
+
+    submitted = forge.submit_all(generator=generator, max_cost_usd=Decimal("0.50"))
+    assert len(submitted) == 2
+    assert {request.asset_id for request in generator.requests} == {
+        "props.crate",
+        "props.barrel",
+    }
