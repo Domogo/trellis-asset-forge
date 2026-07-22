@@ -68,7 +68,7 @@ assets:
 
     assert [request.seed for request in generator.requests] == [10, 11]
     assert {request.endpoint for request in generator.requests} == {"fal-ai/trellis-2"}
-    assert {request.decimation_target for request in generator.requests} == {20_000}
+    assert {request.decimation_target for request in generator.requests} == {10_000}
     assert len(submitted) == 2
     assert {generation.status for generation in submitted} == {"submitted"}
     assert {generation.request_id for generation in submitted} == {"fal-0", "fal-1"}

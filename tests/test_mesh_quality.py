@@ -36,6 +36,7 @@ def test_inspection_fails_budget_component_and_open_surface_gates(tmp_path: Path
     strict = GameProfile(
         name="test",
         triangle_budget=4,
+        candidate_vertex_target=2,
         texture_size=1024,
         max_materials=2,
         max_components=1,

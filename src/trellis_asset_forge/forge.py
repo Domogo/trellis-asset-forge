@@ -101,7 +101,7 @@ class AssetForge:
                 resolution=asset.generation.resolution,
                 texture_size=asset.generation.texture_size or profile.texture_size,
                 decimation_target=(
-                    asset.generation.decimation_target or profile.triangle_budget
+                    asset.generation.decimation_target or profile.candidate_vertex_target
                 ),
                 remesh=asset.generation.remesh,
             )

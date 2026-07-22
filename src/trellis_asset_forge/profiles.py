@@ -10,6 +10,7 @@ class GameProfile:
 
     name: str
     triangle_budget: int
+    candidate_vertex_target: int
     texture_size: Literal[1024, 2048, 4096]
     max_materials: int
     max_components: int
@@ -20,6 +21,7 @@ PROFILES: dict[str, GameProfile] = {
     "mobile-prop": GameProfile(
         name="mobile-prop",
         triangle_budget=20_000,
+        candidate_vertex_target=10_000,
         texture_size=1024,
         max_materials=2,
         max_components=8,
@@ -28,6 +30,7 @@ PROFILES: dict[str, GameProfile] = {
     "desktop-prop": GameProfile(
         name="desktop-prop",
         triangle_budget=50_000,
+        candidate_vertex_target=25_000,
         texture_size=2048,
         max_materials=4,
         max_components=16,
@@ -36,6 +39,7 @@ PROFILES: dict[str, GameProfile] = {
     "hero-static": GameProfile(
         name="hero-static",
         triangle_budget=100_000,
+        candidate_vertex_target=50_000,
         texture_size=4096,
         max_materials=6,
         max_components=24,
