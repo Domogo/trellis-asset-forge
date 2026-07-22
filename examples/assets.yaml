@@ -1,0 +1,48 @@
+version: 1
+project: example-game
+assets:
+  - id: props.scrap-crate
+    name: Scrap Crate
+    category: props
+    brief: Chunky welded salvage crate with a strong rectangular silhouette.
+    topology_notes: Preserve broad bevels; reject floating shards and noisy underside geometry.
+    profile: desktop-prop
+    game:
+      scale_meters: 1.2
+      pivot: base-center
+      collision: convex
+    references:
+      - path: references/scrap-crate-front.png
+        view: front-three-quarter
+      - path: references/scrap-crate-rear.png
+        view: rear-three-quarter
+    generation:
+      resolution: 1024
+      variants: 3
+      seed: 4200
+      texture_size: 2048
+      decimation_target: 25000
+      remesh: true
+    export: props/scrap-crate.glb
+
+  - id: pickups.energy-cell
+    name: Energy Cell
+    category: pickups
+    brief: Compact readable pickup with one protected emissive core.
+    topology_notes: Keep the handle thick and the emissive core connected to the main body.
+    profile: mobile-prop
+    game:
+      scale_meters: 0.35
+      pivot: base-center
+      collision: convex
+    references:
+      - path: references/energy-cell.png
+        view: front-three-quarter
+    generation:
+      resolution: 512
+      variants: 2
+      seed: 8100
+      texture_size: 1024
+      decimation_target: 10000
+      remesh: true
+    export: pickups/energy-cell.glb

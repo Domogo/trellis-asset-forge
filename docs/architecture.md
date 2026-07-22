@@ -30,11 +30,11 @@ Optimizes approved candidates and derives LODs through `gltfpack`. Named nodes, 
 
 ### Promotion
 
-Copies an approved processed artifact and a provenance sidecar to a configured export root. Export paths must remain beneath that root.
+Atomically copies an approved processed LOD set and a provenance sidecar to a configured export root. Export paths must remain beneath that root. The sidecar carries portable scale, pivot, and collision intent without pretending those policies were baked into the mesh.
 
 ### Review workspace
 
-Provides a loopback-only FastAPI application for browsing references, previewing local GLBs, comparing reports, and recording approval decisions. It does not expose provider keys to the browser.
+Provides a loopback-only FastAPI application for previewing local GLBs, comparing reports, and recording approval decisions. It does not expose provider keys to the browser or offer a public bind address.
 
 ## Generation state
 
@@ -44,9 +44,8 @@ planned → submitted → running → downloaded → inspected
                                       └──→ approved → processed → promoted
 ```
 
-Remote failure and local validation failure are recorded separately. A failed remote job can be retried with the same parameters; a failed quality gate requires a new candidate or explicit profile change.
+Remote failure and local validation failure are recorded separately. Every planned candidate is durable before remote submission, so a provider failure cannot erase the attempted parameters. A failed quality gate requires a new candidate or explicit profile change.
 
 ## Engine neutrality
 
 Profiles describe budgets and processing policy, not engine import metadata. Promotion emits standard GLB plus JSON provenance. Engine-specific import configuration can be added later as an adapter without changing manifests or the catalog.
-
