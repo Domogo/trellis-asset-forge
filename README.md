@@ -80,6 +80,10 @@ uv run trellis-forge generate-all \
   --workspace ~/projects/my-game-assets --max-cost 10.00
 ```
 
+`generate-all` is spend-idempotent: it skips every asset that already has a local
+generation attempt. Use `generate ASSET_ID` explicitly when you intend to pay for
+a retry or an additional candidate.
+
 Poll until completed candidates have been downloaded locally:
 
 ```bash

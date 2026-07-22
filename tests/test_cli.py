@@ -155,7 +155,7 @@ assets:
     assert "downloaded" in synced.stdout
     assert "downloaded" in downloaded.stdout
     assert generated_all.exit_code == 0
-    assert "Submitted 1 candidates" in generated_all.stdout
+    assert "Submitted 0 candidates" in generated_all.stdout
 
 
 def test_review_command_is_always_bound_to_loopback(

@@ -193,3 +193,7 @@ assets:
         "props.crate",
         "props.barrel",
     }
+
+    repeated = forge.submit_all(generator=generator, max_cost_usd=Decimal("0"))
+    assert repeated == []
+    assert len(generator.requests) == 2

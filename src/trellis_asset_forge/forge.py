@@ -120,8 +120,12 @@ class AssetForge:
         generator: Generator,
         max_cost_usd: Decimal,
     ) -> list[GenerationRecord]:
-        """Submit the full catalog only after enforcing one aggregate cost ceiling."""
-        assets = self.catalog.list_assets()
+        """Submit never-attempted assets after enforcing one aggregate cost ceiling."""
+        assets = [
+            asset
+            for asset in self.catalog.list_assets()
+            if not self.catalog.list_generations(asset.asset_id)
+        ]
         estimated_cost = sum(
             (estimate_generation_cost(asset.generation) for asset in assets),
             start=Decimal("0"),

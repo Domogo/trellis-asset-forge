@@ -8,7 +8,7 @@ Both `trellis-forge` and `taf` invoke the same CLI.
 | `import MANIFEST --workspace PATH` | Validate, hash, price, and catalog a YAML plan. |
 | `assets --workspace PATH` | List assets and active budgets. |
 | `generate ASSET_ID --max-cost USD` | Submit every configured variant for one asset. |
-| `generate-all --max-cost USD` | Cost-gate and submit the complete catalog. |
+| `generate-all --max-cost USD` | Cost-gate and submit catalog assets that have never been attempted. |
 | `sync` | Poll active fal jobs and download completed GLBs. |
 | `generations [--asset ID]` | List durable candidate states without contacting fal. |
 | `inspect GENERATION_ID` | Measure topology against the asset profile. |
@@ -22,7 +22,7 @@ Run `uv run trellis-forge COMMAND --help` for argument details.
 
 ## Cost behavior
 
-`generate` checks the complete variant cost for one asset before submitting its first candidate. `generate-all` checks the complete catalog before submitting its first candidate. Provider failures after the check remain possible; every local generation is persisted before its remote request.
+`generate` checks the complete variant cost for one asset before submitting its first candidate. `generate-all` checks the never-attempted portion of the catalog before submitting its first candidate, so rerunning it cannot silently duplicate prior spend. Retry a failed or rejected asset explicitly with `generate ASSET_ID`. Provider failures after the check remain possible; every local generation is persisted before its remote request.
 
 Built-in estimates are USD 0.25/0.30/0.35 for 512/1024/1536 at the time of the v0.1 implementation. fal pricing can change. Override `generation.unit_cost_usd` in the manifest and keep an explicit `--max-cost` ceiling.
 
