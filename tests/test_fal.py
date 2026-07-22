@@ -2,9 +2,10 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from trellis_asset_forge.domain import GenerationRequest, RemoteJob
-from trellis_asset_forge.fal import FalGenerator
+from trellis_asset_forge.fal import FalError, FalGenerator
 
 
 def test_fal_submission_uses_multi_view_payload_and_privacy_headers(tmp_path: Path) -> None:
@@ -95,3 +96,133 @@ def test_fal_poll_resolves_and_downloads_completed_glb_without_leaking_key(
     assert update.status == "completed"
     assert destination.read_bytes() == b"glTF-binary"
     assert not (tmp_path / "asset.glb.part").exists()
+
+
+@pytest.mark.parametrize(
+    ("remote_status", "expected"),
+    [("IN_QUEUE", "queued"), ("IN_PROGRESS", "running"), ("FAILED", "failed")],
+)
+def test_fal_poll_maps_active_and_failed_queue_states(
+    remote_status: str,
+    expected: str,
+) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"status": remote_status, "error": "provider failed"},
+        )
+    )
+    generator = FalGenerator(api_key="secret", transport=transport)
+    job = RemoteJob(
+        request_id="job",
+        status_url="https://queue.fal.run/job/status",
+        response_url="https://queue.fal.run/job",
+    )
+
+    update = generator.poll(job)
+
+    assert update.status == expected
+    if expected == "failed":
+        assert update.error == "provider failed"
+
+
+def test_fal_rejects_unsafe_urls_endpoints_and_reference_shapes(tmp_path: Path) -> None:
+    image = tmp_path / "front.png"
+    other = tmp_path / "rear.png"
+    image.write_bytes(b"front")
+    other.write_bytes(b"rear")
+    generator = FalGenerator(api_key="secret", transport=httpx.MockTransport(lambda _: None))
+    base = dict(
+        generation_id="local",
+        asset_id="props.crate",
+        variant=0,
+        seed=1,
+        resolution=512,
+        texture_size=1024,
+        decimation_target=20_000,
+        remesh=True,
+    )
+
+    with pytest.raises(FalError, match="Unsupported fal endpoint"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/trellis-2/../other",
+                references=(image,),
+            )
+        )
+    with pytest.raises(FalError, match="multi endpoint requires"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/trellis-2/multi",
+                references=(image,),
+            )
+        )
+    with pytest.raises(FalError, match="single-image endpoint requires"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/trellis-2",
+                references=(image, other),
+            )
+        )
+    with pytest.raises(FalError, match="Refusing non-fal media URL"):
+        generator.download("https://example.com/model.glb", tmp_path / "model.glb")
+    with pytest.raises(FalError, match=r"must use a \.glb destination"):
+        generator.download("https://v3.fal.media/model.glb", tmp_path / "model.obj")
+
+
+def test_fal_reports_invalid_status_and_result_responses() -> None:
+    responses = iter(
+        [
+            httpx.Response(200, json={"status": "MYSTERY"}),
+            httpx.Response(200, json={"status": "COMPLETED"}),
+            httpx.Response(200, json={"wrong": "shape"}),
+        ]
+    )
+    generator = FalGenerator(
+        api_key="secret",
+        transport=httpx.MockTransport(lambda _: next(responses)),
+    )
+    job = RemoteJob(
+        request_id="job",
+        status_url="https://queue.fal.run/job/status",
+        response_url="https://queue.fal.run/job",
+    )
+
+    with pytest.raises(FalError, match="Unknown fal queue status"):
+        generator.poll(job)
+    with pytest.raises(FalError, match="missing model_glb"):
+        generator.poll(job)
+
+
+def test_fal_validates_configuration_and_reference_file_types(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    with pytest.raises(FalError, match="not set"):
+        FalGenerator.from_environment()
+    with pytest.raises(FalError, match="empty"):
+        FalGenerator(api_key=" ")
+    with pytest.raises(FalError, match="at least 60"):
+        FalGenerator(api_key="secret", media_ttl_seconds=59)
+
+    unsupported = tmp_path / "front.txt"
+    unsupported.write_text("not an image")
+    generator = FalGenerator(api_key="secret")
+    request = GenerationRequest(
+        generation_id="local",
+        asset_id="props.crate",
+        variant=0,
+        seed=1,
+        endpoint="fal-ai/trellis-2",
+        references=(unsupported,),
+        resolution=512,
+        texture_size=1024,
+        decimation_target=20_000,
+        remesh=True,
+    )
+    with pytest.raises(FalError, match="Unsupported reference image type"):
+        generator.submit(request)

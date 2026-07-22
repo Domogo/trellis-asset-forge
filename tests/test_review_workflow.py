@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 import trimesh
+from typer.testing import CliRunner
 
+from trellis_asset_forge.cli import app
 from trellis_asset_forge.domain import GenerationRequest, RemoteJob, RemoteUpdate
 from trellis_asset_forge.forge import AssetForge
 
@@ -81,3 +83,29 @@ def test_rejection_records_human_feedback_for_the_next_variant(tmp_path: Path) -
 
     assert rejected.status == "rejected"
     assert rejected.review_notes == "underside is too noisy"
+
+
+def test_cli_inspects_and_records_review_decisions(tmp_path: Path) -> None:
+    _, generation_id = _downloaded_generation(tmp_path)
+    runner = CliRunner()
+
+    inspected = runner.invoke(
+        app, ["inspect", generation_id, "--workspace", str(tmp_path)]
+    )
+    approved = runner.invoke(
+        app,
+        [
+            "approve",
+            generation_id,
+            "--workspace",
+            str(tmp_path),
+            "--notes",
+            "approved in cli",
+        ],
+    )
+
+    assert inspected.exit_code == 0
+    assert "PASS" in inspected.stdout
+    assert "12 tris" in inspected.stdout
+    assert approved.exit_code == 0
+    assert f"Approved {generation_id}" in approved.stdout

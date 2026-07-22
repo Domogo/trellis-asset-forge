@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+import pytest
 import trimesh
+from typer.testing import CliRunner
 
+from trellis_asset_forge.cli import app
 from trellis_asset_forge.domain import GenerationRequest
 from trellis_asset_forge.forge import AssetForge
-from trellis_asset_forge.processing import GltfpackProcessor
+from trellis_asset_forge.processing import GltfpackProcessor, ProcessingError
 
 
 def _approved_generation(tmp_path: Path) -> tuple[AssetForge, str]:
@@ -112,3 +115,46 @@ def test_promotion_exports_lods_and_catalog_provenance_for_game_import(tmp_path:
     }
     assert provenance["source"]["generation_id"] == generation_id
     assert [output["lod"] for output in provenance["outputs"]] == [0, 1, 2]
+
+
+def test_cli_processes_and_promotes_an_approved_candidate(tmp_path: Path) -> None:
+    _, generation_id = _approved_generation(tmp_path)
+    runner = CliRunner()
+
+    processed = runner.invoke(
+        app,
+        [
+            "process",
+            generation_id,
+            "--workspace",
+            str(tmp_path),
+            "--gltfpack",
+            str(_fake_gltfpack(tmp_path)),
+        ],
+    )
+    promoted = runner.invoke(
+        app, ["promote", generation_id, "--workspace", str(tmp_path)]
+    )
+
+    assert processed.exit_code == 0
+    assert "LOD0" in processed.stdout
+    assert "LOD2" in processed.stdout
+    assert promoted.exit_code == 0
+    assert "Provenance:" in promoted.stdout
+    assert (tmp_path / "exports" / "props" / "crate.glb").is_file()
+
+
+def test_processing_reports_missing_and_failed_gltfpack_tools(tmp_path: Path) -> None:
+    with pytest.raises(ProcessingError, match="was not found"):
+        GltfpackProcessor(executable=tmp_path / "missing-gltfpack")
+
+    forge, generation_id = _approved_generation(tmp_path)
+    failing = tmp_path / "gltfpack-failing"
+    failing.write_text("#!/bin/sh\necho 'bad mesh' >&2\nexit 3\n")
+    failing.chmod(0o755)
+
+    with pytest.raises(ProcessingError, match="exit 3: bad mesh"):
+        forge.process_generation(
+            generation_id,
+            processor=GltfpackProcessor(executable=failing),
+        )

@@ -64,6 +64,12 @@ def test_private_review_workspace_previews_inspects_and_approves_candidate(
         data={"notes": "shape and topology approved"},
         follow_redirects=True,
     )
+    rejected = client.post(
+        "/generations/candidate-1/reject",
+        data={"notes": "silhouette needs another pass"},
+        follow_redirects=True,
+    )
+    unknown = client.get("/generations/unknown/model.glb")
 
     assert dashboard.status_code == 200
     assert "Scrap Crate" in dashboard.text
@@ -75,3 +81,7 @@ def test_private_review_workspace_previews_inspects_and_approves_candidate(
     assert approved.status_code == 200
     assert "Approved" in approved.text
     assert "shape and topology approved" in approved.text
+    assert rejected.status_code == 200
+    assert "Rejected" in rejected.text
+    assert "silhouette needs another pass" in rejected.text
+    assert unknown.status_code == 404
