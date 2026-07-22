@@ -75,6 +75,93 @@ assets:
     assert forge.list_generations("props.crate") == submitted
 
 
+def test_manifest_can_select_meshy_v6_preview(tmp_path: Path) -> None:
+    reference = tmp_path / "crate.png"
+    reference.write_bytes(b"reference")
+    manifest = tmp_path / "assets.yaml"
+    manifest.write_text(
+        """
+version: 1
+project: demo
+assets:
+  - id: props.crate
+    name: Crate
+    category: props
+    references:
+      - path: crate.png
+    generation:
+      model: fal-ai/meshy/v6-preview/image-to-3d
+      variants: 1
+    export: props/crate.glb
+""".strip()
+        + "\n"
+    )
+    forge = AssetForge.initialize(tmp_path)
+    imported = forge.import_manifest(manifest)
+    generator = RecordingGenerator()
+
+    forge.submit_asset(
+        "props.crate",
+        generator=generator,
+        max_cost_usd=Decimal("0.80"),
+    )
+
+    assert imported.estimated_cost_usd == Decimal("0.80")
+    assert generator.requests[0].endpoint == "fal-ai/meshy/v6-preview/image-to-3d"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "fal-ai/hunyuan3d-v3/image-to-3d",
+        "fal-ai/hunyuan-3d/v3.1/pro/image-to-3d",
+    ],
+)
+def test_manifest_can_select_hunyuan_models_with_named_views(
+    tmp_path: Path,
+    model: str,
+) -> None:
+    (tmp_path / "front.png").write_bytes(b"front")
+    (tmp_path / "back.png").write_bytes(b"back")
+    manifest = tmp_path / "assets.yaml"
+    manifest.write_text(
+        f"""
+version: 1
+project: demo
+assets:
+  - id: props.crate
+    name: Crate
+    category: props
+    references:
+      - {{path: front.png, view: front}}
+      - {{path: back.png, view: rear}}
+    generation:
+      model: {model}
+    export: props/crate.glb
+""".strip()
+        + "\n"
+    )
+    forge = AssetForge.initialize(tmp_path)
+    imported = forge.import_manifest(manifest)
+    generator = RecordingGenerator()
+
+    with pytest.raises(CostLimitError, match=r"estimated at \$0.53"):
+        forge.submit_asset(
+            "props.crate",
+            generator=generator,
+            max_cost_usd=Decimal("0.524"),
+        )
+    forge.submit_asset(
+        "props.crate",
+        generator=generator,
+        max_cost_usd=Decimal("0.525"),
+    )
+
+    assert imported.estimated_cost_usd == Decimal("0.53")
+    assert generator.requests[0].endpoint == model
+    assert generator.requests[0].reference_views == ("front", "rear")
+
+
 def test_cost_limit_stops_the_batch_before_remote_or_catalog_activity(tmp_path: Path) -> None:
     reference = tmp_path / "crate.png"
     reference.write_bytes(b"reference")

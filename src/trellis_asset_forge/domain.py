@@ -10,6 +10,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from trellis_asset_forge.mesh_quality import MeshQualityReport
+from trellis_asset_forge.models import (
+    DEFAULT_MODEL,
+    HUNYUAN_MODELS,
+    MESHY_MODEL,
+    FalModel,
+    hunyuan_view_field,
+)
 from trellis_asset_forge.profiles import PROFILES
 
 ASSET_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
@@ -25,10 +32,11 @@ class ReferenceSpec(BaseModel):
 
 
 class GenerationSpec(BaseModel):
-    """TRELLIS.2 generation controls that affect cost and mesh output."""
+    """Image-to-3D model selection and generation controls."""
 
     model_config = ConfigDict(extra="forbid")
 
+    model: FalModel = DEFAULT_MODEL
     resolution: Literal[512, 1024, 1536] = 1024
     variants: int = Field(default=1, ge=1, le=20)
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
@@ -87,6 +95,26 @@ class AssetSpec(BaseModel):
         if path.suffix.lower() != ".glb":
             raise ValueError("must end in .glb")
         return path.as_posix()
+
+    @model_validator(mode="after")
+    def validate_model_references(self) -> AssetSpec:
+        model = self.generation.model
+        if model == MESHY_MODEL and len(self.references) != 1:
+            raise ValueError("Meshy v6 image-to-3D requires exactly one reference")
+        if model not in HUNYUAN_MODELS:
+            return self
+
+        fields: set[str] = set()
+        for reference in self.references[1:]:
+            field = hunyuan_view_field(model, reference.view)
+            if field is None:
+                raise ValueError(
+                    f"unsupported Hunyuan reference view {reference.view!r} for {model}"
+                )
+            if field in fields:
+                raise ValueError(f"duplicate Hunyuan reference view {reference.view!r}")
+            fields.add(field)
+        return self
 
 
 class AssetManifest(BaseModel):
@@ -158,10 +186,17 @@ class GenerationRequest(BaseModel):
     seed: int = Field(ge=0, le=2_147_483_647)
     endpoint: str
     references: tuple[Path, ...]
+    reference_views: tuple[str, ...] = ()
     resolution: Literal[512, 1024, 1536]
     texture_size: Literal[1024, 2048, 4096]
     decimation_target: int = Field(ge=5_000, le=500_000)
     remesh: bool
+
+    @model_validator(mode="after")
+    def validate_reference_views(self) -> GenerationRequest:
+        if self.reference_views and len(self.reference_views) != len(self.references):
+            raise ValueError("reference_views must match references")
+        return self
 
 
 class RemoteJob(BaseModel):

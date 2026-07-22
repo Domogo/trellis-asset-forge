@@ -93,7 +93,8 @@ def list_assets_command(
     for asset in assets:
         typer.echo(
             f"{asset.asset_id}  {asset.name}  {asset.profile}  "
-            f"{asset.triangle_budget:,} tris  {len(asset.references)} refs"
+            f"{asset.triangle_budget:,} tris  {len(asset.references)} refs  "
+            f"{asset.generation.model}"
         )
 
 

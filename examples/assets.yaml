@@ -17,12 +17,9 @@ assets:
       - path: references/scrap-crate-rear.png
         view: rear-three-quarter
     generation:
-      resolution: 1024
+      model: fal-ai/hunyuan-3d/v3.1/pro/image-to-3d
       variants: 3
       seed: 4200
-      texture_size: 2048
-      decimation_target: 25000
-      remesh: true
     export: props/scrap-crate.glb
 
   - id: pickups.energy-cell
@@ -39,10 +36,8 @@ assets:
       - path: references/energy-cell.png
         view: front-three-quarter
     generation:
-      resolution: 512
+      model: fal-ai/meshy/v6-preview/image-to-3d
       variants: 2
-      seed: 8100
-      texture_size: 1024
       decimation_target: 10000
       remesh: true
     export: pickups/energy-cell.glb

@@ -1,6 +1,6 @@
 # Example catalog
 
-`assets.yaml` demonstrates one multi-view desktop prop and one single-view mobile pickup.
+`assets.yaml` demonstrates a multi-view Hunyuan 3D V3.1 Pro desktop prop and a single-view Meshy 6 Preview mobile pickup.
 
 Create `examples/references/` and add your own PNG, JPEG, WebP, AVIF, or GIF files under the filenames in the manifest. The repository intentionally does not ship synthetic reference art that could be mistaken for production input.
 

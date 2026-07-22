@@ -1,4 +1,4 @@
-"""Privacy-aware fal queue adapter for TRELLIS.2."""
+"""Privacy-aware fal queue adapter for supported image-to-3D models."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ from urllib.parse import urlparse
 import httpx
 
 from trellis_asset_forge.domain import GenerationRequest, RemoteJob, RemoteUpdate
+from trellis_asset_forge.models import (
+    HUNYUAN_MODELS,
+    MESHY_MODEL,
+    SUPPORTED_ENDPOINTS,
+    hunyuan_view_field,
+)
 
 QUEUE_ORIGIN = "https://queue.fal.run"
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"}
@@ -23,7 +29,7 @@ class FalError(RuntimeError):
 
 
 class FalGenerator:
-    """Submit TRELLIS.2 jobs without persisting fal request payloads."""
+    """Submit supported image-to-3D jobs without persisting fal request payloads."""
 
     def __init__(
         self,
@@ -52,10 +58,10 @@ class FalGenerator:
 
     def submit(self, request: GenerationRequest) -> RemoteJob:
         """Encode local references and submit one asynchronous queue request."""
-        payload = self._payload(request)
         endpoint = request.endpoint.strip("/")
-        if not endpoint.startswith("fal-ai/trellis-2") or ".." in endpoint:
+        if endpoint not in SUPPORTED_ENDPOINTS:
             raise FalError(f"Unsupported fal endpoint: {request.endpoint}")
+        payload = self._payload(request)
         with self._client() as client:
             try:
                 response = client.post(f"{QUEUE_ORIGIN}/{endpoint}", json=payload)
@@ -164,7 +170,38 @@ class FalGenerator:
 
     def _payload(self, request: GenerationRequest) -> dict[str, object]:
         encoded_references = [self._data_uri(path) for path in request.references]
-        payload: dict[str, object] = {
+        if request.endpoint == MESHY_MODEL:
+            if len(encoded_references) != 1:
+                raise FalError("Meshy v6 image-to-3D requires exactly one reference")
+            return {
+                "image_url": encoded_references[0],
+                "target_polycount": request.decimation_target,
+                "should_remesh": request.remesh,
+            }
+        if request.endpoint in HUNYUAN_MODELS:
+            if not encoded_references:
+                raise FalError("Hunyuan image-to-3D requires at least one reference")
+            hunyuan_payload: dict[str, object] = {
+                "input_image_url": encoded_references[0]
+            }
+            if len(encoded_references) > 1 and not request.reference_views:
+                raise FalError("Hunyuan multi-view generation requires named reference views")
+            for view, encoded in zip(
+                request.reference_views[1:],
+                encoded_references[1:],
+                strict=True,
+            ):
+                field = hunyuan_view_field(request.endpoint, view)
+                if field is None:
+                    raise FalError(
+                        f"Unsupported Hunyuan reference view {view!r} for {request.endpoint}"
+                    )
+                if field in hunyuan_payload:
+                    raise FalError(f"Duplicate Hunyuan reference view {view!r}")
+                hunyuan_payload[field] = encoded
+            return hunyuan_payload
+
+        trellis_payload: dict[str, object] = {
             "seed": request.seed,
             "resolution": request.resolution,
             "texture_size": request.texture_size,
@@ -174,12 +211,12 @@ class FalGenerator:
         if request.endpoint.endswith("/multi"):
             if len(encoded_references) < 2:
                 raise FalError("The TRELLIS.2 multi endpoint requires at least two references")
-            payload["image_urls"] = encoded_references
+            trellis_payload["image_urls"] = encoded_references
         else:
             if len(encoded_references) != 1:
                 raise FalError("The TRELLIS.2 single-image endpoint requires exactly one reference")
-            payload["image_url"] = encoded_references[0]
-        return payload
+            trellis_payload["image_url"] = encoded_references[0]
+        return trellis_payload
 
     @staticmethod
     def _data_uri(path: Path) -> str:

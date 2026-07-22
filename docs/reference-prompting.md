@@ -1,6 +1,6 @@
 # Reference prompting for game assets
 
-TRELLIS.2 does not accept text. These prompts are for producing or commissioning the **reference images** that TRELLIS.2 will receive.
+These prompts are for producing or commissioning the **reference images** that an image-to-3D model will receive. They are not sent to the model by the forge.
 
 ## Base reference prompt
 
@@ -28,7 +28,7 @@ micro-greebles, transparent supports, decals outside the silhouette, and baked s
 
 Image-to-3D topology follows visible form, not textual edge-loop instructions. Large coherent volumes and explicit thickness give the model less ambiguous geometry to infer. Thin wires, overlapping silhouettes, loose debris, and baked shadows commonly become floating components or noisy surfaces.
 
-Put asset-specific review criteria in the manifest's `topology_notes`. The forge stores those notes in the catalog and promotion sidecar so a reviewer can reject output that violates the intended form. It never sends the notes as a nonexistent TRELLIS.2 prompt.
+Put asset-specific review criteria in the manifest's `topology_notes`. The forge stores those notes in the catalog and promotion sidecar so a reviewer can reject output that violates the intended form. It never sends the notes as a provider prompt.
 
 ## Multi-view checklist
 

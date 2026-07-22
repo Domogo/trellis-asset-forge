@@ -65,6 +65,129 @@ def test_fal_submission_uses_multi_view_payload_and_privacy_headers(tmp_path: Pa
     assert job.status_url.endswith("/status/remote-123")
 
 
+def test_fal_submission_translates_meshy_generation_controls(tmp_path: Path) -> None:
+    image = tmp_path / "crate.png"
+    image.write_bytes(b"reference")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url == (
+            "https://queue.fal.run/fal-ai/meshy/v6-preview/image-to-3d"
+        )
+        assert json.loads(request.content) == {
+            "image_url": "data:image/png;base64,cmVmZXJlbmNl",
+            "target_polycount": 25_000,
+            "should_remesh": True,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "meshy-123",
+                "status_url": "https://queue.fal.run/status/meshy-123",
+                "response_url": "https://queue.fal.run/result/meshy-123",
+            },
+        )
+
+    generator = FalGenerator(api_key="secret", transport=httpx.MockTransport(handle))
+    request = GenerationRequest(
+        generation_id="local-123",
+        asset_id="props.crate",
+        variant=0,
+        seed=12,
+        endpoint="fal-ai/meshy/v6-preview/image-to-3d",
+        references=(image,),
+        resolution=1024,
+        texture_size=2048,
+        decimation_target=25_000,
+        remesh=True,
+    )
+
+    job = generator.submit(request)
+
+    assert job.request_id == "meshy-123"
+
+
+def test_fal_submission_maps_hunyuan_v3_reference_views(tmp_path: Path) -> None:
+    references = tuple(tmp_path / name for name in ("front.png", "back.png", "left.png"))
+    for reference in references:
+        reference.write_bytes(reference.stem.encode())
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://queue.fal.run/fal-ai/hunyuan3d-v3/image-to-3d"
+        assert json.loads(request.content) == {
+            "input_image_url": "data:image/png;base64,ZnJvbnQ=",
+            "back_image_url": "data:image/png;base64,YmFjaw==",
+            "left_image_url": "data:image/png;base64,bGVmdA==",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "hunyuan-123",
+                "status_url": "https://queue.fal.run/status/hunyuan-123",
+                "response_url": "https://queue.fal.run/result/hunyuan-123",
+            },
+        )
+
+    generator = FalGenerator(api_key="secret", transport=httpx.MockTransport(handle))
+    request = GenerationRequest(
+        generation_id="local-123",
+        asset_id="props.crate",
+        variant=0,
+        seed=12,
+        endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+        references=references,
+        reference_views=("front", "rear", "left"),
+        resolution=1024,
+        texture_size=2048,
+        decimation_target=25_000,
+        remesh=True,
+    )
+
+    job = generator.submit(request)
+
+    assert job.request_id == "hunyuan-123"
+
+
+def test_fal_submission_supports_hunyuan_v31_extended_views(tmp_path: Path) -> None:
+    references = tuple(tmp_path / name for name in ("front.png", "top.png", "angle.png"))
+    for reference in references:
+        reference.write_bytes(reference.stem.encode())
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "request_id": "hunyuan-v31",
+                "status_url": "https://queue.fal.run/status/hunyuan-v31",
+                "response_url": "https://queue.fal.run/result/hunyuan-v31",
+            },
+        )
+
+    generator = FalGenerator(api_key="secret", transport=httpx.MockTransport(handle))
+    generator.submit(
+        GenerationRequest(
+            generation_id="local-123",
+            asset_id="props.crate",
+            variant=0,
+            seed=12,
+            endpoint="fal-ai/hunyuan-3d/v3.1/pro/image-to-3d",
+            references=references,
+            reference_views=("front", "top", "front-left"),
+            resolution=1024,
+            texture_size=2048,
+            decimation_target=25_000,
+            remesh=True,
+        )
+    )
+
+    assert captured == {
+        "input_image_url": "data:image/png;base64,ZnJvbnQ=",
+        "top_image_url": "data:image/png;base64,dG9w",
+        "left_front_image_url": "data:image/png;base64,YW5nbGU=",
+    }
+
+
 def test_fal_poll_resolves_and_downloads_completed_glb_without_leaking_key(
     tmp_path: Path,
 ) -> None:
@@ -167,6 +290,55 @@ def test_fal_rejects_unsafe_urls_endpoints_and_reference_shapes(tmp_path: Path) 
                 references=(image, other),
             )
         )
+    with pytest.raises(FalError, match="Meshy v6 image-to-3D requires exactly one"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/meshy/v6-preview/image-to-3d",
+                references=(image, other),
+            )
+        )
+    with pytest.raises(FalError, match="Hunyuan image-to-3D requires at least one"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+                references=(),
+            )
+        )
+    with pytest.raises(FalError, match="requires named reference views"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+                references=(image, other),
+            )
+        )
+    with pytest.raises(FalError, match="Unsupported Hunyuan reference view"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+                references=(image, other),
+                reference_views=("front", "top"),
+            )
+        )
+    with pytest.raises(FalError, match="Duplicate Hunyuan reference view"):
+        generator.submit(
+            GenerationRequest(
+                **base,
+                endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+                references=(image, other, other),
+                reference_views=("front", "back", "rear"),
+            )
+        )
+    with pytest.raises(ValueError, match="reference_views must match references"):
+        GenerationRequest(
+            **base,
+            endpoint="fal-ai/hunyuan3d-v3/image-to-3d",
+            references=(image, other),
+            reference_views=("front",),
+        )
     with pytest.raises(FalError, match="Refusing non-fal media URL"):
         generator.download("https://example.com/model.glb", tmp_path / "model.glb")
     with pytest.raises(FalError, match=r"must use a \.glb destination"):
@@ -195,6 +367,52 @@ def test_fal_reports_invalid_status_and_result_responses() -> None:
         generator.poll(job)
     with pytest.raises(FalError, match="missing model_glb"):
         generator.poll(job)
+
+
+def test_fal_rejects_invalid_queue_and_submission_responses(tmp_path: Path) -> None:
+    invalid_job = RemoteJob(
+        request_id="job",
+        status_url="https://example.com/job/status",
+        response_url="https://queue.fal.run/job",
+    )
+    generator = FalGenerator(
+        api_key="secret",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=[])),
+    )
+
+    with pytest.raises(FalError, match="Refusing invalid fal queue URL"):
+        generator.poll(invalid_job)
+
+    non_object_job = invalid_job.model_copy(
+        update={"status_url": "https://queue.fal.run/job/status"}
+    )
+    with pytest.raises(FalError, match="status poll returned a non-object response"):
+        generator.poll(non_object_job)
+
+    image = tmp_path / "image.png"
+    image.write_bytes(b"reference")
+    request = GenerationRequest(
+        generation_id="local",
+        asset_id="props.crate",
+        variant=0,
+        seed=1,
+        endpoint="fal-ai/trellis-2",
+        references=(image,),
+        resolution=512,
+        texture_size=1024,
+        decimation_target=20_000,
+        remesh=True,
+    )
+    empty_response = FalGenerator(
+        api_key="secret",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={})),
+    )
+    with pytest.raises(FalError, match="missing request_id"):
+        empty_response.submit(request)
+
+    missing_reference = request.model_copy(update={"references": (tmp_path / "missing.png",)})
+    with pytest.raises(FalError, match="Reference image not found"):
+        empty_response.submit(missing_reference)
 
 
 def test_fal_validates_configuration_and_reference_file_types(

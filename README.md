@@ -4,12 +4,12 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Trellis Asset Forge is a local-first production utility for turning reference images into cataloged, reviewable, game-optimized 3D assets through fal's TRELLIS.2 API.
+Trellis Asset Forge is a local-first production utility for turning reference images into cataloged, reviewable, game-optimized 3D assets through multiple fal image-to-3D APIs.
 
 It gives a game team the missing production layer around generation: asset manifests, multi-asset batches, cost ceilings, reproducible seeds, private local artifact storage, topology inspection, visual approval, LOD processing, and deterministic exports with provenance.
 
 > [!IMPORTANT]
-> TRELLIS.2 is image-conditioned and has no text prompt input. A prompt cannot force clean edge flow. The forge optimizes for game development through purpose-built reference images, `remesh`, low decimation targets, measurable topology gates, human review, and `gltfpack` LODs. `brief` and `topology_notes` guide reference creation and review; they are deliberately not sent to fal as a fake prompt.
+> The supported endpoints are image-conditioned. A prompt cannot force clean edge flow. The forge optimizes for game development through purpose-built reference images, model-aware geometry controls, measurable topology gates, human review, and `gltfpack` LODs. `brief` and `topology_notes` guide reference creation and review; they are deliberately not sent to fal as a fake prompt.
 
 ## What it does
 
@@ -19,7 +19,7 @@ reference images → validated manifest → catalog-wide cost gate → fal queue
       → gltfpack optimization + LODs → game export + provenance
 ```
 
-- Generates one asset or a complete catalog using single-view and multi-view TRELLIS.2 endpoints.
+- Generates one asset or a complete catalog with TRELLIS.2, Meshy 6 Preview, Hunyuan3D V3, or Hunyuan 3D V3.1 Pro.
 - Records reference hashes, endpoint, seed, parameters, price estimate, remote job, and local artifact.
 - Keeps `FAL_KEY` server-side and never exposes it to the review browser.
 - Requests no fal payload retention, uses short media lifetimes, and downloads results immediately.
@@ -74,7 +74,7 @@ Generate one asset with a hard spend ceiling, or submit the whole catalog behind
 
 ```bash
 uv run trellis-forge generate props.scrap-crate \
-  --workspace ~/projects/my-game-assets --max-cost 0.60
+  --workspace ~/projects/my-game-assets --max-cost 2.00
 
 uv run trellis-forge generate-all \
   --workspace ~/projects/my-game-assets --max-cost 10.00
@@ -146,24 +146,34 @@ assets:
       - path: references/scrap-crate-rear.png
         view: rear-three-quarter
     generation:
-      resolution: 1024
+      model: fal-ai/hunyuan-3d/v3.1/pro/image-to-3d
       variants: 3
       seed: 4200
-      texture_size: 2048
-      decimation_target: 25000
-      remesh: true
       # Optional when fal pricing changes:
-      # unit_cost_usd: 0.30
+      # unit_cost_usd: 0.525
     export: props/scrap-crate.glb
 ```
 
-Reference paths resolve relative to the manifest. Each image is hashed during import. One reference uses `fal-ai/trellis-2`; two or more select `fal-ai/trellis-2/multi` automatically.
+Reference paths resolve relative to the manifest. Each image is hashed during import. `generation.model` defaults to `fal-ai/trellis-2`, so existing manifests remain valid.
 
-`brief` and `topology_notes` belong in the catalog and exported provenance. They are not transmitted to TRELLIS.2 because its API accepts `image_url`/`image_urls`, not `prompt`.
+### Generation models
+
+| `generation.model` | References | Model-aware request behavior | Built-in estimate per variant |
+| --- | --- | --- | ---: |
+| `fal-ai/trellis-2` | One or more | Selects the single or multi endpoint automatically; sends seed, resolution, texture size, decimation target, and remesh. | $0.25 / $0.30 / $0.35 at 512 / 1024 / 1536 |
+| `fal-ai/meshy/v6-preview/image-to-3d` | Exactly one | Maps `decimation_target` to `target_polycount` and `remesh` to `should_remesh`. | $0.80 |
+| `fal-ai/hunyuan3d-v3/image-to-3d` | Front plus optional back, left, and right | Uses Hunyuan's default normal textured generation settings. | $0.375, plus $0.15 for multi-view |
+| `fal-ai/hunyuan-3d/v3.1/pro/image-to-3d` | Front plus optional back, left, right, top, bottom, front-left, and front-right | Uses Hunyuan's default normal textured generation settings. | $0.375, plus $0.15 for multi-view |
+
+For both Hunyuan models, the first reference is the primary/front image. Name additional reference `view` values `back` or `rear`, `left`, and `right`. V3.1 Pro additionally accepts `top`, `bottom`, `front-left`, and `front-right`; three-quarter synonyms such as `rear-three-quarter` and `front-left-three-quarter` are also accepted. Unsupported or duplicate views fail manifest import before any paid request.
+
+Hunyuan's `face_count`, PBR, and generation-type controls are left at provider defaults in this release. `resolution`, `texture_size`, `decimation_target`, `remesh`, and `seed` are not sent to Hunyuan. Meshy does not accept a seed, resolution, or texture-size input. The local catalog still assigns a seed to distinguish variants, but only TRELLIS.2 currently receives it for deterministic inference.
+
+`brief` and `topology_notes` belong in the catalog and exported provenance. They are not transmitted to a provider as generation prompts.
 
 ## Game profiles
 
-| Profile | Fal vertex target | Local triangle gate | Texture | Materials | Components | LOD ratios |
+| Profile | Candidate geometry target | Local triangle gate | Texture | Materials | Components | LOD ratios |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `mobile-prop` | 10,000 | 20,000 | 1024 | 2 | 8 | 1.0 / 0.5 / 0.2 |
 | `desktop-prop` | 25,000 | 50,000 | 2048 | 4 | 16 | 1.0 / 0.5 / 0.2 |
@@ -213,7 +223,7 @@ An MCP transport is intentionally not bundled in v0.1: MCP should be a thin adap
 ## Limitations
 
 - Generative topology is suitable for measured static-mesh candidates, not guaranteed production topology.
-- `decimation_target` is fal's target vertex count; the local profile gate measures actual output triangles. Profile defaults therefore request roughly half the triangle gate and still inspect the real result.
+- For TRELLIS.2, `decimation_target` is a target vertex count; for Meshy it becomes `target_polycount`. The local profile gate always measures actual output triangles.
 - LOD simplification can damage thin parts, UVs, normals, or silhouettes, so the approved source and produced LODs still need visual QA.
 - Collision intent is metadata. Exact gameplay collision remains engine/DCC work.
 - Prices can change. Use `unit_cost_usd` in a manifest when the built-in estimate is stale and retain `--max-cost` as the hard gate.
@@ -232,4 +242,4 @@ See [Architecture](docs/architecture.md), [CLI reference](docs/cli.md), [Contrib
 
 ## License
 
-[MIT](LICENSE). TRELLIS.2 is also MIT-licensed; fal is a separate hosted service with its own terms and pricing.
+[MIT](LICENSE). The forge is open source; fal and its hosted models are separate services with their own terms and pricing.

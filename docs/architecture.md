@@ -18,7 +18,7 @@ Owns durable asset, generation, review, and promotion state. Callers use catalog
 
 ### Generation
 
-Accepts a validated generation request, enforces its cost ceiling, submits it through a generator adapter, and records the remote job before returning. The fal adapter owns authentication, data-URI encoding, retention headers, queue polling, result parsing, and immediate downloads.
+Accepts a validated generation request, enforces its model-aware cost ceiling, submits it through a generator adapter, and records the remote job before returning. The fal adapter owns authentication, model-specific payload mapping, data-URI encoding, retention headers, queue polling, result parsing, and immediate downloads.
 
 ### Mesh quality
 

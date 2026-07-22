@@ -8,7 +8,7 @@ import os
 import secrets
 import shutil
 import uuid
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -25,6 +25,7 @@ from trellis_asset_forge.domain import (
 from trellis_asset_forge.generation import CostLimitError, Generator
 from trellis_asset_forge.manifest import load_manifest
 from trellis_asset_forge.mesh_quality import inspect_glb
+from trellis_asset_forge.models import endpoint_for
 from trellis_asset_forge.pricing import estimate_generation_cost
 from trellis_asset_forge.processing import MeshProcessor
 from trellis_asset_forge.profiles import get_profile
@@ -54,12 +55,18 @@ class AssetForge:
         for asset in resolved.assets:
             self.catalog.upsert_asset(asset)
             generations_planned += asset.spec.generation.variants
-            estimated_cost += estimate_generation_cost(asset.spec.generation)
+            estimated_cost += estimate_generation_cost(
+                asset.spec.generation,
+                reference_count=len(asset.references),
+            )
         return ImportResult(
             project=resolved.manifest.project,
             assets_imported=len(resolved.assets),
             generations_planned=generations_planned,
-            estimated_cost_usd=estimated_cost.quantize(Decimal("0.01")),
+            estimated_cost_usd=estimated_cost.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            ),
         )
 
     def list_assets(self) -> list[AssetRecord]:
@@ -75,19 +82,30 @@ class AssetForge:
     ) -> list[GenerationRecord]:
         """Submit every configured variant after enforcing a batch cost ceiling."""
         asset = self.catalog.get_asset(asset_id)
-        estimated_cost = estimate_generation_cost(asset.generation)
+        estimated_cost = estimate_generation_cost(
+            asset.generation,
+            reference_count=len(asset.references),
+        )
         if estimated_cost > max_cost_usd:
+            display_cost = estimated_cost.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
             raise CostLimitError(
-                f"{asset_id} is estimated at ${estimated_cost:.2f}, "
+                f"{asset_id} is estimated at ${display_cost:.2f}, "
                 f"above the ${max_cost_usd:.2f} limit"
             )
         profile = get_profile(asset.profile)
-        unit_cost = (estimated_cost / asset.generation.variants).quantize(Decimal("0.01"))
+        unit_cost = (estimated_cost / asset.generation.variants).quantize(
+            Decimal("0.001"),
+            rounding=ROUND_HALF_UP,
+        )
         base_seed = asset.generation.seed
         if base_seed is None:
             base_seed = secrets.randbelow(2_147_483_647 - asset.generation.variants)
-        endpoint = (
-            "fal-ai/trellis-2/multi" if len(asset.references) > 1 else "fal-ai/trellis-2"
+        endpoint = endpoint_for(
+            asset.generation.model,
+            reference_count=len(asset.references),
         )
         submitted: list[GenerationRecord] = []
         for variant in range(asset.generation.variants):
@@ -98,6 +116,7 @@ class AssetForge:
                 seed=base_seed + variant,
                 endpoint=endpoint,
                 references=tuple(reference.path for reference in asset.references),
+                reference_views=tuple(reference.view for reference in asset.references),
                 resolution=asset.generation.resolution,
                 texture_size=asset.generation.texture_size or profile.texture_size,
                 decimation_target=(
@@ -127,12 +146,22 @@ class AssetForge:
             if not self.catalog.list_generations(asset.asset_id)
         ]
         estimated_cost = sum(
-            (estimate_generation_cost(asset.generation) for asset in assets),
+            (
+                estimate_generation_cost(
+                    asset.generation,
+                    reference_count=len(asset.references),
+                )
+                for asset in assets
+            ),
             start=Decimal("0"),
         )
         if estimated_cost > max_cost_usd:
+            display_cost = estimated_cost.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
             raise CostLimitError(
-                f"Catalog batch is estimated at ${estimated_cost:.2f}, "
+                f"Catalog batch is estimated at ${display_cost:.2f}, "
                 f"above the ${max_cost_usd:.2f} limit"
             )
         submitted: list[GenerationRecord] = []
@@ -141,7 +170,10 @@ class AssetForge:
                 self.submit_asset(
                     asset.asset_id,
                     generator=generator,
-                    max_cost_usd=estimate_generation_cost(asset.generation),
+                    max_cost_usd=estimate_generation_cost(
+                        asset.generation,
+                        reference_count=len(asset.references),
+                    ),
                 )
             )
         return submitted

@@ -24,7 +24,7 @@ Run `uv run trellis-forge COMMAND --help` for argument details.
 
 `generate` checks the complete variant cost for one asset before submitting its first candidate. `generate-all` checks the never-attempted portion of the catalog before submitting its first candidate, so rerunning it cannot silently duplicate prior spend. Retry a failed or rejected asset explicitly with `generate ASSET_ID`. Provider failures after the check remain possible; every local generation is persisted before its remote request.
 
-Built-in estimates are USD 0.25/0.30/0.35 for 512/1024/1536 at the time of the v0.1 implementation. fal pricing can change. Override `generation.unit_cost_usd` in the manifest and keep an explicit `--max-cost` ceiling.
+Built-in per-variant estimates are USD 0.25/0.30/0.35 for TRELLIS.2 at 512/1024/1536, USD 0.80 for Meshy 6 Preview, and USD 0.375 for either Hunyuan model plus USD 0.15 for multi-view input. fal pricing can change. Override `generation.unit_cost_usd` in the manifest and keep an explicit `--max-cost` ceiling.
 
 ## Job polling
 
