@@ -181,5 +181,71 @@ def list_generations_command(
         )
 
 
+@app.command("inspect")
+def inspect_generation_command(
+    generation_id: Annotated[str, typer.Argument(help="Local generation identifier.")],
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+) -> None:
+    """Measure topology and evaluate a downloaded candidate's game profile."""
+    try:
+        generation = AssetForge.open(workspace).inspect_generation(generation_id)
+    except (KeyError, OSError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    report = generation.quality_report
+    if report is None:
+        raise RuntimeError("Inspection completed without a quality report")
+    result = "PASS" if report.passed else "FAIL"
+    typer.echo(
+        f"{result}  {report.triangles:,} tris  {report.vertices:,} vertices  "
+        f"{report.components} components"
+    )
+    for issue in report.issues:
+        typer.echo(f"{issue.severity.upper()} {issue.code}: {issue.message}")
+
+
+@app.command("approve")
+def approve_generation_command(
+    generation_id: Annotated[str, typer.Argument(help="Inspected generation identifier.")],
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+    notes: Annotated[str, typer.Option(help="Human review notes.")] = "",
+) -> None:
+    """Approve a candidate that passes its topology and profile gates."""
+    try:
+        generation = AssetForge.open(workspace).approve_generation(
+            generation_id, notes=notes
+        )
+    except (KeyError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Approved {generation.generation_id}")
+
+
+@app.command("reject")
+def reject_generation_command(
+    generation_id: Annotated[str, typer.Argument(help="Inspected generation identifier.")],
+    notes: Annotated[str, typer.Option(help="Required actionable review feedback.")],
+    workspace: Annotated[
+        Path,
+        typer.Option(help="Initialized Asset Forge workspace."),
+    ] = Path("."),
+) -> None:
+    """Reject a candidate and retain feedback for the next generation."""
+    try:
+        generation = AssetForge.open(workspace).reject_generation(
+            generation_id, notes=notes
+        )
+    except (KeyError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Rejected {generation.generation_id}")
+
+
 if __name__ == "__main__":
     app()

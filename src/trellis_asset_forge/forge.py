@@ -17,6 +17,7 @@ from trellis_asset_forge.domain import (
 )
 from trellis_asset_forge.generation import CostLimitError, Generator
 from trellis_asset_forge.manifest import load_manifest
+from trellis_asset_forge.mesh_quality import inspect_glb
 from trellis_asset_forge.pricing import estimate_generation_cost
 from trellis_asset_forge.profiles import get_profile
 from trellis_asset_forge.workspace import Workspace
@@ -108,6 +109,44 @@ class AssetForge:
     def list_generations(self, asset_id: str | None = None) -> list[GenerationRecord]:
         """List durable generation state, optionally scoped to one asset."""
         return self.catalog.list_generations(asset_id)
+
+    def inspect_generation(self, generation_id: str) -> GenerationRecord:
+        """Measure a downloaded candidate against its declared game profile."""
+        generation = self.catalog.get_generation(generation_id)
+        if generation.status not in {"downloaded", "inspected", "rejected"}:
+            raise ValueError("Only a downloaded candidate can be inspected")
+        if generation.artifact_path is None:
+            raise ValueError("Downloaded candidate is missing its local artifact")
+        asset = self.catalog.get_asset(generation.asset_id)
+        report = inspect_glb(generation.artifact_path, get_profile(asset.profile))
+        return self.catalog.mark_inspected(generation_id, report.model_dump_json())
+
+    def approve_generation(self, generation_id: str, *, notes: str = "") -> GenerationRecord:
+        """Approve a candidate only after it passes recorded quality gates."""
+        generation = self.catalog.get_generation(generation_id)
+        if generation.status != "inspected" or generation.quality_report is None:
+            raise ValueError("Inspect the candidate before approval")
+        if not generation.quality_report.passed:
+            raise ValueError("Candidate has failing topology or profile quality gates")
+        return self.catalog.mark_reviewed(
+            generation_id,
+            status="approved",
+            notes=notes.strip(),
+        )
+
+    def reject_generation(self, generation_id: str, *, notes: str) -> GenerationRecord:
+        """Reject an inspected candidate while retaining actionable feedback."""
+        generation = self.catalog.get_generation(generation_id)
+        if generation.status not in {"inspected", "approved"}:
+            raise ValueError("Inspect the candidate before rejection")
+        cleaned = notes.strip()
+        if not cleaned:
+            raise ValueError("Rejection notes are required")
+        return self.catalog.mark_reviewed(
+            generation_id,
+            status="rejected",
+            notes=cleaned,
+        )
 
     def sync(self, *, generator: Generator) -> list[GenerationRecord]:
         """Poll active jobs and immediately own completed GLB artifacts locally."""

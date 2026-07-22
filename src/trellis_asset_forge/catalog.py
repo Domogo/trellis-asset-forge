@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS generations (
     artifact_path TEXT,
     remote_url TEXT,
     error TEXT,
+    quality_json TEXT,
+    review_notes TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -73,6 +75,7 @@ class Catalog:
         self.path = path
         with self._connection() as connection:
             connection.executescript(SCHEMA)
+            self._migrate(connection)
 
     def upsert_asset(self, asset: ResolvedAsset) -> None:
         """Insert or replace one asset and its ordered reference evidence."""
@@ -233,6 +236,34 @@ class Catalog:
         )
         return self.get_generation(generation_id)
 
+    def mark_inspected(
+        self, generation_id: str, quality_report_json: str
+    ) -> GenerationRecord:
+        """Persist measured quality evidence for a downloaded candidate."""
+        self._update_generation(
+            generation_id,
+            status="inspected",
+            quality_json=quality_report_json,
+        )
+        return self.get_generation(generation_id)
+
+    def mark_reviewed(
+        self,
+        generation_id: str,
+        *,
+        status: GenerationStatus,
+        notes: str,
+    ) -> GenerationRecord:
+        """Persist an explicit human approval or rejection decision."""
+        if status not in {"approved", "rejected"}:
+            raise ValueError("Review status must be approved or rejected")
+        self._update_generation(
+            generation_id,
+            status=status,
+            review_notes=notes,
+        )
+        return self.get_generation(generation_id)
+
     def list_generations(self, asset_id: str | None = None) -> list[GenerationRecord]:
         """Return generations in deterministic creation order."""
         query = "SELECT * FROM generations"
@@ -267,6 +298,8 @@ class Catalog:
         error: str | None = None,
         artifact_path: str | None = None,
         remote_url: str | None = None,
+        quality_json: str | None = None,
+        review_notes: str | None = None,
     ) -> None:
         with self._connection() as connection:
             cursor = connection.execute(
@@ -279,6 +312,8 @@ class Catalog:
                     error = COALESCE(?, error),
                     artifact_path = COALESCE(?, artifact_path),
                     remote_url = COALESCE(?, remote_url),
+                    quality_json = COALESCE(?, quality_json),
+                    review_notes = COALESCE(?, review_notes),
                     updated_at = ?
                 WHERE generation_id = ?
                 """,
@@ -290,6 +325,8 @@ class Catalog:
                     error,
                     artifact_path,
                     remote_url,
+                    quality_json,
+                    review_notes,
                     datetime.now(UTC).isoformat(),
                     generation_id,
                 ),
@@ -299,7 +336,10 @@ class Catalog:
 
     @staticmethod
     def _generation_from_row(row: sqlite3.Row) -> GenerationRecord:
+        from trellis_asset_forge.mesh_quality import MeshQualityReport
+
         artifact = row["artifact_path"]
+        quality_json = row["quality_json"]
         return GenerationRecord(
             generation_id=str(row["generation_id"]),
             asset_id=str(row["asset_id"]),
@@ -316,7 +356,27 @@ class Catalog:
             artifact_path=Path(str(artifact)) if artifact is not None else None,
             remote_url=str(row["remote_url"]) if row["remote_url"] is not None else None,
             error=str(row["error"]) if row["error"] is not None else None,
+            quality_report=(
+                MeshQualityReport.model_validate_json(str(quality_json))
+                if quality_json is not None
+                else None
+            ),
+            review_notes=(
+                str(row["review_notes"]) if row["review_notes"] is not None else None
+            ),
         )
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        """Apply additive catalog migrations for pre-release workspaces."""
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(generations)").fetchall()
+        }
+        if "quality_json" not in columns:
+            connection.execute("ALTER TABLE generations ADD COLUMN quality_json TEXT")
+        if "review_notes" not in columns:
+            connection.execute("ALTER TABLE generations ADD COLUMN review_notes TEXT")
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

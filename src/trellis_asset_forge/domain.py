@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from trellis_asset_forge.mesh_quality import MeshQualityReport
 from trellis_asset_forge.profiles import PROFILES
 
 ASSET_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
@@ -209,3 +210,5 @@ class GenerationRecord(BaseModel):
     artifact_path: Path | None = None
     remote_url: str | None = None
     error: str | None = None
+    quality_report: MeshQualityReport | None = None
+    review_notes: str | None = None
