@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Trellis Asset Forge is a local-first production utility for turning reference images into cataloged, reviewable, game-optimized 3D assets through multiple fal image-to-3D APIs.
+Trellis Asset Forge is a local-first production utility for generating game assets through fal. It turns reference images into cataloged, reviewable, game-optimized 3D assets and provides cost-gated music and sound-effect generation through five text-to-audio endpoints.
 
 It gives a game team the missing production layer around generation: asset manifests, multi-asset batches, cost ceilings, reproducible seeds, private local artifact storage, topology inspection, visual approval, LOD processing, and deterministic exports with provenance.
 
@@ -20,6 +20,7 @@ reference images → validated manifest → catalog-wide cost gate → fal queue
 ```
 
 - Generates one asset or a complete catalog with TRELLIS.2, Meshy 6 Preview, Hunyuan3D V3, or Hunyuan 3D V3.1 Pro.
+- Generates music and SFX with Stable Audio 3, ElevenLabs, or CassetteAI and writes the provider output directly to an explicit local file.
 - Records reference hashes, endpoint, seed, parameters, price estimate, remote job, and local artifact.
 - Keeps `FAL_KEY` server-side and never exposes it to the review browser.
 - Requests no fal payload retention, uses short media lifetimes, and downloads results immediately.
@@ -124,6 +125,58 @@ generated/
     └── scrap-crate.asset-forge.json
 ```
 
+## Music and SFX
+
+Audio generation is a direct, cost-gated command. It does not require a 3D workspace or add audio to the 3D catalog. The command waits for fal, downloads the result locally, refuses to replace an existing destination, and never forwards `FAL_KEY` to media storage.
+
+Generate reproducible background music with the default Stable Audio 3 Medium endpoint:
+
+```bash
+uv run taf audio ./generated/audio/combat-loop.ogg \
+  --prompt "Instrumental industrial combat loop, bowed steel, heavy mechanical percussion" \
+  --duration 90 --format ogg --seed 4200 --max-cost 0.04
+```
+
+Choose any supported fal endpoint through `--model`:
+
+| `--model` | Use | Important controls | Built-in estimate |
+| --- | --- | --- | ---: |
+| [`fal-ai/stable-audio-3/medium/text-to-audio`](https://fal.ai/models/fal-ai/stable-audio-3/medium/text-to-audio/api) | Default music | Seed, negative prompt, up to 380 seconds, WAV/FLAC/OGG/MP3 and related formats | $0.0376 / output |
+| [`fal-ai/elevenlabs/music`](https://fal.ai/models/fal-ai/elevenlabs/music/api) | Premium music | 3–600 seconds, instrumental policy, provider codec/sample-rate format | $0.80 / started minute |
+| [`fal-ai/elevenlabs/sound-effects/v2`](https://fal.ai/models/fal-ai/elevenlabs/sound-effects/v2/api) | Default SFX | 0.5–22 seconds, prompt influence, seamless-loop request | $0.002 / second |
+| [`fal-ai/stable-audio-3/small/sfx/text-to-audio`](https://fal.ai/models/fal-ai/stable-audio-3/small/sfx/text-to-audio/api) | Seeded SFX | Seed, negative prompt, WAV/FLAC/OGG/MP3 and related formats | $0.0206 / output |
+| [`cassetteai/music-generator`](https://fal.ai/models/cassetteai/music-generator/api) | Budget music | Prompt, whole-second duration; always WAV | $0.02 / output minute |
+
+Examples for the other four endpoints:
+
+```bash
+# ElevenLabs music
+uv run taf audio ./generated/audio/menu.mp3 \
+  --model fal-ai/elevenlabs/music \
+  --prompt "Instrumental scrapyard menu theme, 85 BPM, restrained percussion" \
+  --duration 120 --format mp3_44100_128 --max-cost 1.60
+
+# ElevenLabs SFX with loop intent
+uv run taf audio ./generated/audio/hydraulic-pump.opus \
+  --model fal-ai/elevenlabs/sound-effects/v2 \
+  --prompt "Looping hydraulic pump with loose metal vibration" \
+  --duration 8 --format opus_48000_128 --loop --max-cost 0.02
+
+# Seeded Stable Audio SFX
+uv run taf audio ./generated/audio/hatch-slam.wav \
+  --model fal-ai/stable-audio-3/small/sfx/text-to-audio \
+  --prompt "Heavy steel cargo hatch slamming, short industrial reverb" \
+  --duration 3 --format wav --seed 77 --max-cost 0.03
+
+# Fast budget music
+uv run taf audio ./generated/audio/garage-radio.wav \
+  --model cassetteai/music-generator \
+  --prompt "Lo-fi salvage-yard garage radio, 85 BPM, instrumental" \
+  --duration 60 --max-cost 0.02
+```
+
+Stable Audio formats are `mp3`, `wav`, `flac`, `ogg`, `opus`, `m4a`, and `aac`. ElevenLabs uses its full codec/sample-rate format names such as `mp3_44100_128`, `opus_48000_128`, or `pcm_44100`; the destination suffix must be `.mp3`, `.opus`, or `.pcm` respectively. The forge does not transcode or normalize the provider output.
+
 ## Manifest
 
 ```yaml
@@ -218,6 +271,25 @@ jobs = forge.submit_all(
 )
 ```
 
+Audio automation uses model-specific validated request types behind one adapter:
+
+```python
+from pathlib import Path
+
+from trellis_asset_forge.audio import FalAudioGenerator, StableAudioRequest
+
+request = StableAudioRequest(
+    prompt="Industrial exploration loop with bowed metal",
+    duration_seconds=90,
+    output_format="ogg",
+    seed=4200,
+)
+FalAudioGenerator.from_environment().generate(
+    request,
+    Path("generated/audio/exploration-loop.ogg"),
+)
+```
+
 An MCP transport is intentionally not bundled in v0.1: MCP should be a thin adapter over this interface, not a second workflow implementation. The local review app is human-facing and has its OpenAPI endpoints disabled.
 
 ## Limitations
@@ -227,6 +299,8 @@ An MCP transport is intentionally not bundled in v0.1: MCP should be a thin adap
 - LOD simplification can damage thin parts, UVs, normals, or silhouettes, so the approved source and produced LODs still need visual QA.
 - Collision intent is metadata. Exact gameplay collision remains engine/DCC work.
 - Prices can change. Use `unit_cost_usd` in a manifest when the built-in estimate is stale and retain `--max-cost` as the hard gate.
+- Audio pricing estimates can change and are not provider quotes. Keep an explicit `audio --max-cost` ceiling.
+- Audio generation currently writes the provider file directly; catalog provenance, loudness analysis, loop-seam QA, and transcoding are not yet bundled.
 - The review viewer loads Google's `<model-viewer>` module from a CDN; GLB files remain served from loopback.
 
 ## Development

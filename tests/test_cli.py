@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from trellis_asset_forge import __version__
+from trellis_asset_forge.audio import StableAudioRequest
 from trellis_asset_forge.cli import app
 from trellis_asset_forge.domain import GenerationRequest, RemoteJob, RemoteUpdate
 from trellis_asset_forge.forge import AssetForge
@@ -178,3 +179,89 @@ def test_review_command_is_always_bound_to_loopback(
     assert "http://127.0.0.1:9876" in result.stdout
     assert observed["host"] == "127.0.0.1"
     assert observed["port"] == 9876
+
+
+def test_audio_command_cost_gates_and_generates_to_an_explicit_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class CliAudioGenerator:
+        def generate(
+            self,
+            request: object,
+            destination: Path,
+            *,
+            poll_interval_seconds: float,
+            timeout_seconds: float,
+        ) -> Path:
+            captured.update(
+                request=request,
+                destination=destination,
+                poll_interval_seconds=poll_interval_seconds,
+                timeout_seconds=timeout_seconds,
+            )
+            destination.write_bytes(b"audio")
+            return destination
+
+    monkeypatch.setattr(
+        "trellis_asset_forge.cli.FalAudioGenerator.from_environment",
+        lambda **_: CliAudioGenerator(),
+    )
+    destination = tmp_path / "combat-loop.ogg"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "audio",
+            str(destination),
+            "--prompt",
+            "Industrial combat loop with bowed metal",
+            "--duration",
+            "45",
+            "--format",
+            "ogg",
+            "--seed",
+            "4200",
+            "--max-cost",
+            "0.04",
+            "--poll-interval",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"Generated audio: {destination.resolve()}" in result.stdout
+    request = captured["request"]
+    assert isinstance(request, StableAudioRequest)
+    assert request.duration_seconds == 45
+    assert request.seed == 4200
+    assert request.output_format == "ogg"
+
+
+def test_audio_command_blocks_estimated_spend_before_reading_the_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FAL_KEY", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "audio",
+            str(tmp_path / "music.mp3"),
+            "--model",
+            "fal-ai/elevenlabs/music",
+            "--prompt",
+            "Long industrial soundtrack",
+            "--duration",
+            "61",
+            "--max-cost",
+            "1.59",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "estimated at $1.6000" in result.stderr
+    assert "FAL_KEY" not in result.stderr

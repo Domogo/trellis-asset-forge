@@ -5,12 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "trellis-asset-forge"
 version = "0.1.0"
-description = "Cataloged, reviewable, game-ready 3D asset generation with fal"
+description = "Local-first 3D, music, and sound-effect generation with fal"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Domagoj Satrapa" }]
-keywords = ["trellis", "meshy", "hunyuan", "fal", "3d", "game-development", "gltf", "glb"]
+keywords = [
+  "trellis",
+  "meshy",
+  "hunyuan",
+  "stable-audio",
+  "elevenlabs",
+  "fal",
+  "3d",
+  "audio",
+  "game-development",
+  "gltf",
+  "glb",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",

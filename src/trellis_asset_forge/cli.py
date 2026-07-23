@@ -8,17 +8,98 @@ import typer
 import uvicorn
 
 from trellis_asset_forge import __version__
+from trellis_asset_forge.audio import (
+    CASSETTE_MUSIC_MODEL,
+    ELEVENLABS_MUSIC_MODEL,
+    ELEVENLABS_SFX_MODEL,
+    STABLE_AUDIO_MUSIC_MODEL,
+    STABLE_AUDIO_SFX_MODEL,
+    AudioRequest,
+    CassetteMusicRequest,
+    ElevenLabsMusicRequest,
+    ElevenLabsSfxRequest,
+    FalAudioGenerator,
+    StableAudioRequest,
+)
 from trellis_asset_forge.fal import FalError, FalGenerator
 from trellis_asset_forge.forge import AssetForge
 from trellis_asset_forge.generation import CostLimitError
+from trellis_asset_forge.pricing import estimate_audio_cost
 from trellis_asset_forge.processing import GltfpackProcessor, ProcessingError
 from trellis_asset_forge.review_web import create_review_app
 
 app = typer.Typer(
     name="trellis-forge",
-    help="Catalog, generate, review, and promote game-ready 3D assets.",
+    help="Generate local 3D and audio assets with fal.",
     no_args_is_help=True,
 )
+
+AUDIO_MODELS = (
+    STABLE_AUDIO_MUSIC_MODEL,
+    ELEVENLABS_MUSIC_MODEL,
+    ELEVENLABS_SFX_MODEL,
+    STABLE_AUDIO_SFX_MODEL,
+    CASSETTE_MUSIC_MODEL,
+)
+
+
+def _audio_request(
+    *,
+    model: str,
+    prompt: str,
+    duration: float,
+    output_format: str | None,
+    seed: int | None,
+    negative_prompt: str,
+    loop: bool,
+    prompt_influence: float,
+    instrumental: bool,
+) -> AudioRequest:
+    common: dict[str, object] = {
+        "model": model,
+        "prompt": prompt,
+        "duration_seconds": duration,
+    }
+    if model in {STABLE_AUDIO_MUSIC_MODEL, STABLE_AUDIO_SFX_MODEL}:
+        common.update(
+            negative_prompt=negative_prompt,
+            seed=seed,
+            output_format=output_format or "wav",
+        )
+        return StableAudioRequest.model_validate(common)
+
+    if seed is not None or negative_prompt:
+        raise ValueError("--seed and --negative-prompt are supported only by Stable Audio")
+    if model == ELEVENLABS_MUSIC_MODEL:
+        if loop:
+            raise ValueError("--loop is supported only by ElevenLabs SFX V2")
+        common.update(
+            duration_seconds=_whole_seconds(duration, model),
+            force_instrumental=instrumental,
+            output_format=output_format or "mp3_44100_128",
+        )
+        return ElevenLabsMusicRequest.model_validate(common)
+    if model == ELEVENLABS_SFX_MODEL:
+        common.update(
+            prompt_influence=prompt_influence,
+            output_format=output_format or "mp3_44100_128",
+            loop=loop,
+        )
+        return ElevenLabsSfxRequest.model_validate(common)
+    if model == CASSETTE_MUSIC_MODEL:
+        if loop:
+            raise ValueError("--loop is supported only by ElevenLabs SFX V2")
+        if output_format not in {None, "wav"}:
+            raise ValueError("CassetteAI music output is always WAV")
+        common["duration_seconds"] = _whole_seconds(duration, model)
+        return CassetteMusicRequest.model_validate(common)
+    raise ValueError(f"Unsupported audio model {model!r}; choose one of: {', '.join(AUDIO_MODELS)}")
+
+
+def _whole_seconds(duration: float, model: str) -> int:
+    if not duration.is_integer():
+        raise ValueError(f"{model} requires a whole-second duration")
+    return int(duration)
 
 
 def _version_callback(value: bool) -> None:
@@ -192,6 +273,99 @@ def generate_all_command(
             f"generation={generation.generation_id}"
         )
     typer.echo(f"Submitted {len(generations)} candidates. Run `trellis-forge sync`.")
+
+
+@app.command("audio")
+def generate_audio_command(
+    destination: Annotated[
+        Path,
+        typer.Argument(help="Output audio file; extension must match the selected format."),
+    ],
+    prompt: Annotated[
+        str,
+        typer.Option(help="Text description of the music or sound effect."),
+    ],
+    model: Annotated[
+        str,
+        typer.Option(help="Full fal text-to-audio endpoint identifier."),
+    ] = STABLE_AUDIO_MUSIC_MODEL,
+    duration: Annotated[
+        float,
+        typer.Option(help="Requested duration in seconds.", min=0.1),
+    ] = 30,
+    output_format: Annotated[
+        str | None,
+        typer.Option("--format", help="Provider output format; defaults are model-aware."),
+    ] = None,
+    seed: Annotated[
+        int | None,
+        typer.Option(help="Stable Audio reproducibility seed."),
+    ] = None,
+    negative_prompt: Annotated[
+        str,
+        typer.Option(help="Qualities Stable Audio should avoid."),
+    ] = "",
+    loop: Annotated[
+        bool,
+        typer.Option(help="Ask ElevenLabs SFX V2 for a seamless loop."),
+    ] = False,
+    prompt_influence: Annotated[
+        float,
+        typer.Option(help="ElevenLabs SFX prompt adherence.", min=0, max=1),
+    ] = 0.3,
+    instrumental: Annotated[
+        bool,
+        typer.Option("--instrumental/--allow-vocals", help="ElevenLabs music vocal policy."),
+    ] = True,
+    max_cost: Annotated[
+        float,
+        typer.Option(help="Hard USD ceiling checked before submission.", min=0),
+    ] = 1.0,
+    media_ttl: Annotated[
+        int,
+        typer.Option(help="Seconds before fal-hosted media expires."),
+    ] = 3600,
+    poll_interval: Annotated[
+        float,
+        typer.Option(help="Seconds between fal queue polls.", min=0),
+    ] = 2.0,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Maximum seconds to wait for completion.", min=1),
+    ] = 900,
+) -> None:
+    """Generate one music or sound-effect file through a supported fal endpoint."""
+    try:
+        request = _audio_request(
+            model=model,
+            prompt=prompt,
+            duration=duration,
+            output_format=output_format,
+            seed=seed,
+            negative_prompt=negative_prompt,
+            loop=loop,
+            prompt_influence=prompt_influence,
+            instrumental=instrumental,
+        )
+        estimated_cost = estimate_audio_cost(request)
+        ceiling = Decimal(str(max_cost))
+        if estimated_cost > ceiling:
+            raise CostLimitError(
+                f"Audio request is estimated at ${estimated_cost:.4f}, "
+                f"above the ${ceiling:.2f} limit"
+            )
+        generator = FalAudioGenerator.from_environment(media_ttl_seconds=media_ttl)
+        output = generator.generate(
+            request,
+            destination,
+            poll_interval_seconds=poll_interval,
+            timeout_seconds=timeout,
+        )
+    except (CostLimitError, FalError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Generated audio: {output}")
+    typer.echo(f"Estimated cost: ${estimated_cost:.4f}")
 
 
 @app.command("generations")

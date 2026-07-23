@@ -20,6 +20,10 @@ Owns durable asset, generation, review, and promotion state. Callers use catalog
 
 Accepts a validated generation request, enforces its model-aware cost ceiling, submits it through a generator adapter, and records the remote job before returning. The fal adapter owns authentication, model-specific payload mapping, data-URI encoding, retention headers, queue polling, result parsing, and immediate downloads.
 
+### Audio generation
+
+Keeps provider differences behind `FalAudioGenerator`. Callers select one model-specific validated request type; the adapter maps it to the corresponding fal schema, normalizes both `audio` and `audio_file` result shapes, polls to completion, and writes the exact provider output to an explicit path. The CLI applies a provider-aware spend ceiling before constructing the authenticated adapter. Audio is intentionally independent from the 3D catalog and mesh review state machine.
+
 ### Mesh quality
 
 Inspects downloaded GLB files and produces a report for the selected game profile: triangle and vertex counts, scene bounds, materials, textures, mesh components, watertightness signals, and file size. It reports evidence; it does not relabel a poor mesh as game-ready.
